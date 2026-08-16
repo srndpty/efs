@@ -46,6 +46,8 @@ add_library(efs_core STATIC
     src/core/FileKinds.cpp
     src/core/Formatting.h
     src/core/Formatting.cpp
+    src/core/PathUtils.h
+    src/core/PathUtils.cpp
     src/backend/everything/EverythingApi.h
     src/backend/everything/EverythingApi.cpp
     src/backend/everything/EverythingQueryBuilder.h
@@ -74,8 +76,17 @@ qt_add_executable(efs WIN32
     src/app/main.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
+    src/app/Theme.h
+    src/app/Theme.cpp
+    src/app/ToolbarIcons.h
+    src/app/ToolbarIcons.cpp
+    src/app/FileActions.h
+    src/app/FileActions.cpp
 )
-target_link_libraries(efs PRIVATE efs_core Qt6::Widgets)
+# dwmapi: タイトルバーのダーク化 (Theme.cpp)。
+# shell32 / ole32: Explorer で選択 (FileActions.cpp)。どちらも Windows 固有
+# 処理を閉じ込めた 2 ファイルだけが使う。
+target_link_libraries(efs PRIVATE efs_core Qt6::Widgets dwmapi shell32 ole32)
 efs_copy_everything_dll(efs)
 
 if(MSVC)

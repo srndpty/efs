@@ -51,8 +51,8 @@ void SearchController::setText(const QString& text)
     // 食い違う結果が描画される」時間窓ができる。
     startNewGeneration();
 
-    if (m_query.text.trimmed().isEmpty()) {
-        // 空入力では検索しない。世代を進めるだけで結果は捨てられる。
+    if (!hasSearchConstraint(m_query)) {
+        // 絞り込みが何も無い状態では検索しない。世代を進めるだけで結果は捨てられる。
         m_debounce->stop();
         emit cleared();
         return;
@@ -66,11 +66,38 @@ void SearchController::searchNow()
     dispatch();
 }
 
+void SearchController::setKind(FileKind kind)
+{
+    if (kind == m_query.kind)
+        return;
+    m_query.kind = kind;
+    dispatch();
+}
+
+void SearchController::setRegex(bool regex)
+{
+    if (regex == m_query.regex)
+        return;
+    m_query.regex = regex;
+    dispatch();
+}
+
+void SearchController::setSort(SortKey key, SortOrder order)
+{
+    if (key == m_query.sortKey && order == m_query.sortOrder)
+        return;
+    m_query.sortKey = key;
+    m_query.sortOrder = order;
+    dispatch();
+}
+
 void SearchController::dispatch()
 {
+    // 待機中のデバウンスは畳み込む。ここで新しい世代を採番するので、
+    // 経路がどれであっても実行中/キュー内の検索はこの時点で stale になる。
     m_debounce->stop();
 
-    if (m_query.text.trimmed().isEmpty()) {
+    if (!hasSearchConstraint(m_query)) {
         startNewGeneration();
         emit cleared();
         return;

@@ -17,6 +17,10 @@ class ResultTableModel : public QAbstractTableModel {
 public:
     enum Column { ColumnName = 0, ColumnPath, ColumnSize, ColumnDateModified, ColumnCount };
 
+    // 行のフルパス。コンテキストメニュー / ダブルクリック / クリップボードが
+    // 使う。文字列連結を UI 側へ散らさないための唯一の入口 (core/PathUtils.h)。
+    enum Roles { FullPathRole = Qt::UserRole + 1 };
+
     explicit ResultTableModel(QObject* parent = nullptr);
 
     void setRows(QVector<ResultRow> rows);
