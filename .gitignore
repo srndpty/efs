@@ -1,0 +1,26 @@
+# Build output
+/build/
+/out/
+CMakeUserPresets.json
+
+# Tooling logs
+aqtinstall.log
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Qt
+*.qmlc
+*.jsc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# OS / editor noise
+Thumbs.db
+Desktop.ini
+*.swp
+*~
