@@ -1,5 +1,6 @@
 #include "app/ToolbarIcons.h"
 
+#include <QColor>
 #include <QFont>
 #include <QIcon>
 #include <QPainter>
@@ -14,7 +15,6 @@ namespace {
 // 論理 16px のツールバーで縮小表示される前提で、余裕を持って 64px で描く。
 constexpr int kSize = 64;
 constexpr qreal kStroke = 5.0;
-constexpr auto kInk = "#d4d4d4";
 
 QPainterPath imageGlyph()
 {
@@ -94,7 +94,7 @@ QPainterPath allGlyph()
     return path;
 }
 
-QIcon fromPath(const QPainterPath& path)
+QIcon fromPath(const QPainterPath& path, const QColor& ink)
 {
     QPixmap pixmap(kSize, kSize);
     pixmap.fill(Qt::transparent);
@@ -102,7 +102,7 @@ QIcon fromPath(const QPainterPath& path)
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
     // 括弧だと関数宣言に解釈される (most vexing parse) ため波括弧で初期化する。
-    QPen pen{QColor(kInk)};
+    QPen pen{ink};
     pen.setWidthF(kStroke);
     pen.setJoinStyle(Qt::RoundJoin);
     pen.setCapStyle(Qt::RoundCap);
@@ -115,33 +115,56 @@ QIcon fromPath(const QPainterPath& path)
 
 } // namespace
 
-QIcon kindIcon(FileKind kind)
+QIcon kindIcon(FileKind kind, const QColor& ink)
 {
     switch (kind) {
     case FileKind::All:
-        return fromPath(allGlyph());
+        return fromPath(allGlyph(), ink);
     case FileKind::Image:
-        return fromPath(imageGlyph());
+        return fromPath(imageGlyph(), ink);
     case FileKind::Video:
-        return fromPath(videoGlyph());
+        return fromPath(videoGlyph(), ink);
     case FileKind::Audio:
-        return fromPath(audioGlyph());
+        return fromPath(audioGlyph(), ink);
     case FileKind::Document:
-        return fromPath(documentGlyph());
+        return fromPath(documentGlyph(), ink);
     case FileKind::Directory:
-        return fromPath(directoryGlyph());
+        return fromPath(directoryGlyph(), ink);
     }
     return {};
 }
 
-QIcon regexIcon()
+QIcon themeIcon(const QColor& ink)
 {
     QPixmap pixmap(kSize, kSize);
     pixmap.fill(Qt::transparent);
 
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QColor(kInk));
+    QPen pen{ink};
+    pen.setWidthF(kStroke);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    // 円の輪郭 + 右半分の塗りつぶし = 明暗の対比。
+    const QRectF circle(14, 14, 36, 36);
+    painter.drawEllipse(circle);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(ink);
+    painter.drawChord(circle, -90 * 16, 180 * 16);
+    painter.end();
+
+    return {pixmap};
+}
+
+QIcon regexIcon(const QColor& ink)
+{
+    QPixmap pixmap(kSize, kSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(ink);
     QFont font = painter.font();
     font.setPixelSize(46);
     font.setBold(true);

@@ -108,6 +108,13 @@ private slots:
     void whitespaceOnlyTextSearchesOnlyWithRegex();
     void stateChangeInvalidatesRunningSearch_data();
     void stateChangeInvalidatesRunningSearch();
+
+    // --- Phase 3: 設定復元 ----------------------------------------------------
+    void restoredDefaultOptionsIssueNoQuery();
+    void restoredFileKindIssuesAtMostOneQuery_data();
+    void restoredFileKindIssuesAtMostOneQuery();
+    void restoreDoesNotFanOutIntoMultipleQueries();
+    void optionsRoundTripThroughController();
 };
 
 // (1) worker 側。4 要求を連射すると、実行されるのは最初と最後だけで、
@@ -572,6 +579,124 @@ void TestSearchController::stateChangeInvalidatesRunningSearch()
     // 採用されたのは状態変更後の検索の結果だけ。
     QCOMPARE(resultsFrom(spy, 0).id, queries.at(1).id);
     QVERIFY(queries.at(1).id > queries.at(0).id);
+}
+
+// --- Phase 3: 設定復元 --------------------------------------------------------
+//
+// 起動時の復元で backend へ何本のクエリが飛ぶかを固定する。setKind / setRegex /
+// setSort を順に呼ぶ実装に戻すと、ここが 2〜3 本になって落ちる。
+
+// 既定のオプション (All / Regex OFF / Name 昇順) + 検索欄が空 → 検索は 0 本。
+void TestSearchController::restoredDefaultOptionsIssueNoQuery()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy resultsSpy(&controller, &efs::SearchController::resultsReady);
+    QSignalSpy clearedSpy(&controller, &efs::SearchController::cleared);
+
+    controller.restoreOptions({});
+
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(fake->queries().size(), 0);
+    QCOMPARE(resultsSpy.count(), 0);
+    // 絞り込みが無いので「結果なし」を 1 回通知するだけ。
+    QCOMPARE(clearedSpy.count(), 1);
+}
+
+// 種別が復元されていれば filter-only のクエリを 1 本だけ。
+void TestSearchController::restoredFileKindIssuesAtMostOneQuery_data()
+{
+    QTest::addColumn<efs::FileKind>("kind");
+    QTest::newRow("Image") << efs::FileKind::Image;
+    QTest::newRow("Video") << efs::FileKind::Video;
+    QTest::newRow("Audio") << efs::FileKind::Audio;
+    QTest::newRow("Document") << efs::FileKind::Document;
+    QTest::newRow("Directory") << efs::FileKind::Directory;
+}
+
+void TestSearchController::restoredFileKindIssuesAtMostOneQuery()
+{
+    QFETCH(efs::FileKind, kind);
+
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+
+    efs::SearchOptions options;
+    options.kind = kind;
+    controller.restoreOptions(options);
+
+    QTRY_COMPARE(fake->queries().size(), 1);
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(fake->queries().size(), 1); // 追加は飛ばない
+
+    const efs::SearchQuery query = fake->queries().at(0);
+    QCOMPARE(query.kind, kind);
+    QVERIFY(query.text.isEmpty()); // 検索文字列は永続化しない
+}
+
+// 4 つの値をすべて既定から変えて復元しても、クエリは 1 本のまま。
+void TestSearchController::restoreDoesNotFanOutIntoMultipleQueries()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+
+    const efs::SearchOptions options{.kind = efs::FileKind::Image,
+                                     .regex = true,
+                                     .sortKey = efs::SortKey::DateModified,
+                                     .sortOrder = efs::SortOrder::Desc};
+    controller.restoreOptions(options);
+
+    QTRY_COMPARE(fake->queries().size(), 1);
+    QTest::qWait(6 * kDebounceMs);
+    QCOMPARE(fake->queries().size(), 1);
+
+    // 1 本のクエリに 4 つの値がすべて載っていること。
+    const efs::SearchQuery query = fake->queries().at(0);
+    QCOMPARE(query.kind, efs::FileKind::Image);
+    QCOMPARE(query.regex, true);
+    QCOMPARE(query.sortKey, efs::SortKey::DateModified);
+    QCOMPARE(query.sortOrder, efs::SortOrder::Desc);
+}
+
+// 終了時に保存する値は controller から取る (UI が別に状態を持たない)。
+void TestSearchController::optionsRoundTripThroughController()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kNeverFiresMs = 600000;
+    efs::SearchController controller(std::move(backend), kNeverFiresMs);
+
+    const efs::SearchOptions options{.kind = efs::FileKind::Audio,
+                                     .regex = true,
+                                     .sortKey = efs::SortKey::Size,
+                                     .sortOrder = efs::SortOrder::Desc};
+    controller.restoreOptions(options);
+
+    const efs::SearchOptions readBack = controller.options();
+    QCOMPARE(readBack.kind, options.kind);
+    QCOMPARE(readBack.regex, options.regex);
+    QCOMPARE(readBack.sortKey, options.sortKey);
+    QCOMPARE(readBack.sortOrder, options.sortOrder);
+
+    // 個別のアクセサとも一致する。
+    QCOMPARE(controller.kind(), options.kind);
+    QCOMPARE(controller.regex(), options.regex);
+    QCOMPARE(controller.sortKey(), options.sortKey);
+    QCOMPARE(controller.sortOrder(), options.sortOrder);
 }
 
 QTEST_GUILESS_MAIN(TestSearchController)

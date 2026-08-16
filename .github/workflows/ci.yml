@@ -56,6 +56,44 @@ jobs:
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure
 
+  package:
+    name: package (windeployqt)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Release)
+        run: >
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+
+      # 手順はスクリプト側に一本化する。ワークフローに windeployqt の起動を
+      # 書き写すと必ず片方だけ古くなる (lint / coverage と同じ理由)。
+      # スクリプトは fail-closed: critical artifact が 1 つでも欠ければ
+      # dist を消して非ゼロで終わるので、ここでの追加検証は不要。
+      #
+      # **Everything の IPC は必須にしない。** ランナーに Everything が無いのは
+      # 正常であり、このジョブが見るのは Qt の deployment と必須ファイルの存在だけ。
+      - name: Package
+        run: pwsh scripts/package.ps1 -BuildDir build/ci -Config Release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: efs-windows-x64
+          if-no-files-found: error
+          path: dist/efs
+
   lint:
     name: lint (clang-tidy)
     runs-on: windows-latest

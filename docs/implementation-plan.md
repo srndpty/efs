@@ -274,7 +274,7 @@ buildQueryString(q) =
 
 **種別フィルタは hard constraint とする (P2 review で確定)**: Everything は演算子の優先順位を設定で変更できるため、`ext:... a|b` のままだと種別項が OR の片側からしか掛からない可能性がある。実測では**現在の既定設定で `|` は空白 (AND) より強く結合しており破綻していない**が、設定に依存させないため、種別項があり Regex OFF のときはユーザー式全体を Everything のグルーピング `<...>` で囲む。`( )` はグルーピングではない (括弧を含む名前を探しに行く) ことも実測で確認した。`<>` を被せても結果が変わらないことを AND / OR / 否定 / 引用 / ワイルドカード / inline regex / 入れ子 `<>` / 不均衡な `<` `>` / 他の修飾子の 13 ケースで確認済み (README)。パーサやフォールバックは作らない。
 
-**不正な正規表現は検出できない。** Everything は構文エラーを返さず、単に 0 件を返す (`GetLastError()` は `EVERYTHING_OK`)。したがって「Regex が壊れている」ことを backend から知る手段は無く、`SearchResults::error` にも載らない。検索欄を赤くする等の error UX は Phase 3 で UI 側の判断として実装するしかない。
+**不正な正規表現は検出できない。** Everything は構文エラーを返さず、単に 0 件を返す (`GetLastError()` は `EVERYTHING_OK`)。したがって「Regex が壊れている」ことを backend から知る手段は無く、`SearchResults::error` にも載らない。**Phase 3 で確定**: 検索欄を赤くする error UX は UI 側の判断として `QRegularExpression` で行う (`app/RegexValidation.*`)。これは advisory であり backend の authority ではない。**「0 件だから invalid」と判定してはならない** — 陰性対照で 0 件を返す valid なパターンを確認済み。
 
 ### 6.3 `EverythingBackend::search()` — 1クエリの手順
 
@@ -475,6 +475,48 @@ struct Settings {
 
 ### Phase 3 — 定着 (使いながら)
 設定の永続化 (F9) / エラー状態表示 (N4: Everything 未起動時の案内) / アイコン (拡張子キャッシュ) / キーボードナビ調整 / `windeployqt` でポータブルフォルダ生成。
+
+**Phase 3 結果 (完了)**
+
+- 実装: `app/Settings.*` (QSettings を触る唯一の場所) / `app/Theme.*` を
+  `ThemeMode{System,Dark,Light}` へ拡張 (既定は Dark のまま) /
+  `app/RegexValidation.*` (advisory) / `app/IconCache.*` + `app/ShellIcon.*` +
+  `app/IconDelegate.*` (アイコン) / `scripts/package.ps1` / CI に package ジョブ。
+- **設定復元でクエリを fan-out させない。** `SearchController::restoreOptions()`
+  で 4 つの値をまとめて入れ、最後に 1 回だけ `dispatch()` する。`setKind` /
+  `setRegex` / `setSort` を順に呼ぶ実装だと復元だけで最大 3 本飛ぶ。
+  検索欄は起動時に空なので、実際に飛ぶのは「復元された kind が All 以外」の
+  ときの filter-only 1 本だけ (All なら 0 本)。回帰テストは
+  `restoredDefaultOptionsIssueNoQuery` / `restoredFileKindIssuesAtMostOneQuery` /
+  `restoreDoesNotFanOutIntoMultipleQueries`。
+- 検索文字列は保存しない (search history と意味が混ざるため)。
+  `searchTextIsNotPersisted` で INI のキー一覧ごと固定した。
+  enum は int の生値ではなく安定した文字列で書き、未知値・別スキーマは既定値へ戻す。
+- **不正な正規表現の扱い**: 6.2 に書いたとおり Everything は 0 件を返すだけなので、
+  UI 側で `QRegularExpression` を **best-effort advisory** として使う。
+  実装前に陽性対照ファイルで 28 パターンの互換性 probe を行い、
+  **「Qt が invalid と言うのに Everything では動く」ケースが 1 つも無い**ことを
+  確認した (先読み / 後読み / `(?i)` / `\s` / Unicode まで一致。README 参照)。
+  判定がどうであれユーザーのパターンは書き換えず、検索は既存経路で渡す。
+- **アイコンは種別単位。** キーは `dir:` / `ext:<小文字>`。lookup は専用スレッド
+  1 本で、同じキーの要求は重複させない。実ファイルには触れず
+  `SHGetFileInfoW` + `SHGFI_USEFILEATTRIBUTES` を使う。完了通知は行番号を持たない
+  ので、モデル reset と競合しない。`ResultTableModel` は plain data の
+  `IconKeyRole` (ただの QString) を返すだけで QtGui 依存へ広がっていない。
+  `efs_core` には `Qt6::Gui` (QImage) だけを足し、**Widgets と Win32 は入れていない**。
+- deviation (計画との差分):
+  1. 計画 7 は `DecorationRole` を `ResultTableModel` に持たせる想定だったが、
+     モデルを QtGui 依存にしないため `QStyledItemDelegate::initStyleOption` へ移した。
+  2. `QApplication::setStyle()` は既に Fusion なら呼び直さない。テーマ切替の
+     たびに呼ぶとステータスバーの表示中メッセージが消えたため (実測)。
+  3. ツールバーアイコンの色を固定値から palette の `ButtonText` に変えた。
+     固定色のままだと Light テーマで見えなくなる (実測)。
+  4. 計画 8 にあった `matchCase` / `matchPath` / `maxResults` / `debounceMs` の
+     永続化は入れていない。UI から変更する経路が無く、保存しても意味が無いため。
+- 未対処 (実測値の提示にとどめた): `Image` + Regex ON の検索は Everything 側が
+  全走査になり **24.5 秒**かかることがある。UI はブロックしないが、IPC クエリは
+  中断できない契約なので、その間は直前の結果が残り続ける。フォールバックや
+  打ち切りは追加していない。
 
 ### Phase 4 — 将来 backend の受け皿 (MVP には不要・着手は任意)
 `BackendFactory` に `NativeNtfsBackend` の空実装を追加 (`isAvailable()` は false を返す) / backend 共通の適合テストスイート (両実装が同じテストを通ることを保証) / INI の隠し設定で backend 選択。

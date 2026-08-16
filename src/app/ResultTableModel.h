@@ -17,9 +17,15 @@ class ResultTableModel : public QAbstractTableModel {
 public:
     enum Column { ColumnName = 0, ColumnPath, ColumnSize, ColumnDateModified, ColumnCount };
 
-    // 行のフルパス。コンテキストメニュー / ダブルクリック / クリップボードが
-    // 使う。文字列連結を UI 側へ散らさないための唯一の入口 (core/PathUtils.h)。
-    enum Roles { FullPathRole = Qt::UserRole + 1 };
+    enum Roles {
+        // 行のフルパス。コンテキストメニュー / ダブルクリック / クリップボードが
+        // 使う。文字列連結を UI 側へ散らさないための唯一の入口 (core/PathUtils.h)。
+        FullPathRole = Qt::UserRole + 1,
+        // ファイル種別アイコンのキー (ディレクトリ / 拡張子)。**ただの QString**。
+        // アイコンそのものは app 層の IconDelegate / IconCache が持つ。モデルを
+        // QtGui 依存へ広げず、data() から実ファイルへ I/O を出さないための境界。
+        IconKeyRole,
+    };
 
     explicit ResultTableModel(QObject* parent = nullptr);
 

@@ -91,6 +91,25 @@ void SearchController::setSort(SortKey key, SortOrder order)
     dispatch();
 }
 
+void SearchController::restoreOptions(const SearchOptions& options)
+{
+    // 値を全部入れてから 1 回だけ dispatch する。個々の setter を呼ぶと
+    // 復元だけで最大 3 本のクエリが飛ぶ。
+    m_query.kind = options.kind;
+    m_query.regex = options.regex;
+    m_query.sortKey = options.sortKey;
+    m_query.sortOrder = options.sortOrder;
+    dispatch();
+}
+
+SearchOptions SearchController::options() const
+{
+    return {.kind = m_query.kind,
+            .regex = m_query.regex,
+            .sortKey = m_query.sortKey,
+            .sortOrder = m_query.sortOrder};
+}
+
 void SearchController::dispatch()
 {
     // 待機中のデバウンスは畳み込む。ここで新しい世代を採番するので、

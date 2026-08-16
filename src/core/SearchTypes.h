@@ -31,6 +31,18 @@ struct SearchQuery {
     int maxResults = kDefaultMaxResults;
 };
 
+// 再起動をまたいで復元する検索オプション (Phase 3 / F9)。
+//
+// SearchQuery のうち「永続化する分」だけを取り出した部分集合。UI が SearchQuery
+// 全体を直接編集する形へ戻さないために、あえて別の型にしてある。text と id は
+// 含めない (検索文字列は永続化しない — search history と意味が混ざるため)。
+struct SearchOptions {
+    FileKind kind = FileKind::All;
+    bool regex = false;
+    SortKey sortKey = SortKey::Name;
+    SortOrder sortOrder = SortOrder::Asc;
+};
+
 // 絞り込み条件が 1 つでもあるか。無ければ検索そのものを行わない。
 //
 // backend 非依存に判定する。SearchController から buildQueryString() を呼んで

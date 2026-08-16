@@ -21,6 +21,7 @@ private slots:
     void formatStatusSingleResult();
     void formatStatusTruncated();
     void formatStatusError();
+    void formatStatusZeroResultsIsNotAnError();
 };
 
 void TestFormatting::initTestCase()
@@ -108,8 +109,23 @@ void TestFormatting::formatStatusError()
     results.error = QStringLiteral("Everything is not running.");
     results.elapsedMs = 1;
 
-    // エラー時は件数を出さない。
-    QCOMPARE(efs::formatStatus(results), QStringLiteral("Everything is not running."));
+    // エラー時は件数を出さない。「正常に 0 件」と取り違えないよう必ず
+    // "Search failed:" で始める (Phase 3)。
+    QCOMPARE(efs::formatStatus(results),
+             QStringLiteral("Search failed: Everything is not running."));
+}
+
+// 正常な 0 件は失敗と見分けが付くこと。ここが混ざると「Everything が落ちて
+// いるのか、単に一致が無いのか」が UI から分からなくなる。
+void TestFormatting::formatStatusZeroResultsIsNotAnError()
+{
+    efs::SearchResults results;
+    results.totalMatches = 0;
+    results.elapsedMs = 3;
+
+    const QString status = efs::formatStatus(results);
+    QCOMPARE(status, QStringLiteral("0 results / 3 ms"));
+    QVERIFY(!status.startsWith(QStringLiteral("Search failed")));
 }
 
 QTEST_GUILESS_MAIN(TestFormatting)

@@ -1,5 +1,6 @@
 #include "app/ResultTableModel.h"
 
+#include "app/IconCache.h"
 #include "core/Formatting.h"
 #include "core/PathUtils.h"
 
@@ -49,6 +50,10 @@ QVariant ResultTableModel::data(const QModelIndex& index, int role) const
     // フルパスは列に依らず同じ。ツールチップにも同じものを出す。
     if (role == FullPathRole || role == Qt::ToolTipRole)
         return fullPath(row);
+
+    // 種別だけから決まる文字列。ここでファイルを stat しない。
+    if (role == IconKeyRole)
+        return iconKeyFor(row.isDir, row.name);
 
     if (role != Qt::DisplayRole)
         return {};

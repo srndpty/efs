@@ -49,6 +49,16 @@ public:
     void setRegex(bool regex);
     void setSort(SortKey key, SortOrder order);
 
+    // 起動時に永続化されたオプションをまとめて戻す (Phase 3 / F9)。
+    //
+    // setKind() / setRegex() / setSort() を順に呼ぶと 1 回の復元で最大 3 本の
+    // クエリが backend へ飛ぶ。ここは 4 つの値を先に全部入れてから 1 回だけ
+    // dispatch する。結果として発行されるクエリは高々 1 本 (検索欄は起動時に
+    // 空なので、復元された kind が All なら 0 本 = cleared)。
+    void restoreOptions(const SearchOptions& options);
+
+    [[nodiscard]] SearchOptions options() const;
+
     [[nodiscard]] FileKind kind() const { return m_query.kind; }
     [[nodiscard]] bool regex() const { return m_query.regex; }
     [[nodiscard]] SortKey sortKey() const { return m_query.sortKey; }
