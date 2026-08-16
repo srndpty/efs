@@ -8,6 +8,7 @@
 
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "Everything.h"
 
@@ -146,7 +147,9 @@ SearchResults EverythingBackend::search(const SearchQuery& query)
     }
 
     results.totalMatches = m_api.GetTotResults();
-    results.truncated = results.totalMatches > static_cast<quint64>(results.rows.size());
+    // totalMatches は符号なし、rows.size() は符号付き。キャストで黙らせず
+    // std::cmp_greater で比較する。
+    results.truncated = std::cmp_greater(results.totalMatches, results.rows.size());
     results.elapsedMs = timer.elapsed();
     return results;
 }

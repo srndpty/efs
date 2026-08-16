@@ -3,6 +3,9 @@
 /out/
 CMakeUserPresets.json
 
+# CI と同じ clang-tidy を手元で再現するための venv (AGENTS.md 参照)
+.tidy*/
+
 # Tooling logs
 aqtinstall.log
 # OpenCppCoverage は実行時の作業ディレクトリにログを吐く

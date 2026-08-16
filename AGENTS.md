@@ -95,8 +95,7 @@ pre-commit run --all-files
 # lint (Developer PowerShell が必要。compile_commands.json を使う)
 cmake --preset ninja-x64-debug
 cmake --build --preset ninja-x64-debug
-$tidy = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-tidy.exe"
-& $tidy -p build/ninja-x64-debug --quiet (Get-ChildItem -Recurse src -Include *.cpp).FullName
+pwsh scripts/lint.ps1
 
 # カバレッジ (要 OpenCppCoverage)
 pwsh scripts/coverage.ps1
@@ -109,7 +108,21 @@ pwsh scripts/coverage.ps1
 
 - **clang-tidy は x64 版を使う。** VS 同梱の `VC\Tools\Llvm\bin` は 32bit 版で、
   Qt のヘッダを解析するとアクセス違反 (0xC0000005) で落ちる。
-  `VC\Tools\Llvm\x64\bin` を使うこと。
+  `VC\Tools\Llvm\x64\bin` を使うこと (`scripts/lint.ps1` がそうしている)。
+- **ローカルと CI で clang-tidy のバージョンが違う。** ローカルは VS 2022 同梱の
+  19.1.5、CI ランナーはより新しい VS 同梱版。新しい方でだけ有効な check があり、
+  **ローカルが緑でも CI が落ちることがある**。実例: `modernize-use-integer-sign-comparison`
+  は clang-tidy 20 で追加されたため 19.1.5 では検出されず、CI だけが失敗した。
+  `WarningsAsErrors: '*'` なので新しい check は即エラーになる。CI が lint で
+  落ちたら `pwsh scripts/lint.ps1 -ClangTidy <新しい clang-tidy のパス>` で手元に
+  再現させる。スクリプトはバージョンを表示するので CI ログと突き合わせられる。
+  新しい版が手元に無ければ venv に入れるのが手軽 (システムを汚さない):
+
+  ```powershell
+  python -m venv .tidy20
+  .tidy20\Scripts\pip install clang-tidy==20.1.0
+  pwsh scripts/lint.ps1 -ClangTidy .tidy20\Scripts\clang-tidy.exe
+  ```
 - **QtTest はリダイレクトされると標準出力に何も書かない。** Windows では
   コンソールが無いと判断すると `OutputDebugString` へ送るため、ctest から
   実行すると結果が見えない。`tests/CMakeLists.txt` で
