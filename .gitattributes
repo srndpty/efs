@@ -1,0 +1,7 @@
+# 改行は LF に統一する。.editorconfig と pre-commit の mixed-line-ending
+# (--fix=lf) と揃えるため、チェックアウト時も変換しない。
+* text=auto eol=lf
+
+# ベンダリングした SDK は変換も差分表示もしない。
+third_party/** -text -diff
+*.dll binary
