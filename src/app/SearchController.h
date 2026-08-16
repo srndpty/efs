@@ -52,7 +52,8 @@ signals:
 private:
     void dispatch();
     void onResultsReady(const efs::SearchResults& results);
-    // 新しい id を採番し、UI 側と worker 側の「最新」を同時に更新する。
+    // 新しい世代 id を採番し、UI 側と worker 側の「最新」を同時に更新する。
+    // これ以前に発行された検索の結果は、以後どちらの段でも採用されない。
     quint64 startNewGeneration();
 
     QThread* m_thread = nullptr;

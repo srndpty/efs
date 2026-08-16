@@ -42,7 +42,9 @@ public:
         return results;
     }
 
-    // 検索スレッドが search() に入るのを待つ。
+    // 検索スレッドが search() に入るのを待つ。**permit を 1 つ消費する**ので、
+    // 式を複数回評価する QTRY_* の中で使ってはならない (待機には副作用の無い
+    // executed() を使う)。
     [[nodiscard]] bool waitStarted(int timeoutMs = 5000)
     {
         return m_started.tryAcquire(1, timeoutMs);
@@ -75,6 +77,7 @@ class TestSearchController : public QObject {
 private slots:
     void staleQueuedRequestsAreDroppedBeforeExecution();
     void staleResultDoesNotOverwriteNewerOne();
+    void resultCompletingDuringDebounceIsDropped();
     void debounceCoalescesRapidInput();
     void emptyTextClearsWithoutSearching();
 };
@@ -98,7 +101,7 @@ void TestSearchController::staleQueuedRequestsAreDroppedBeforeExecution()
     controller.searchNow();
     QVERIFY(fake->waitStarted());
 
-    // 止まっている間に 3 つ積む。id は 2, 3, 4 で、最新は 4。
+    // 止まっている間に 3 つ積む。最後の "abcdef" が最新世代になる。
     for (const QString& text :
          {QStringLiteral("ab"), QStringLiteral("abc"), QStringLiteral("abcdef")}) {
         controller.setText(text);
@@ -115,7 +118,7 @@ void TestSearchController::staleQueuedRequestsAreDroppedBeforeExecution()
     QCOMPARE(spy.count(), 1);
 
     QCOMPARE(fake->executed(), QStringList({QStringLiteral("a"), QStringLiteral("abcdef")}));
-    QCOMPARE(resultsFrom(spy, 0).id, quint64(4));
+    // id の具体値は世代の採番規則に依存するので、内容で判定する。
     QCOMPARE(resultsFrom(spy, 0).rows.at(0).name, QStringLiteral("abcdef"));
     // 画面に残るのは最後の入力の結果。
     QCOMPARE(model.rowCount(), 1);
@@ -134,14 +137,14 @@ void TestSearchController::staleResultDoesNotOverwriteNewerOne()
     QSignalSpy spy(&controller, &efs::SearchController::resultsReady);
 
     controller.setText(QStringLiteral("a"));
-    controller.searchNow(); // id 1。worker の事前チェックは通過済み
+    controller.searchNow(); // worker の事前チェックは通過済み
     QVERIFY(fake->waitStarted());
 
     controller.setText(QStringLiteral("abcdef"));
-    controller.searchNow(); // id 2 が最新になる
+    controller.searchNow(); // "abcdef" が最新世代になる
 
-    fake->release();              // id 1 が完了 → UI 側で破棄されること
-    QVERIFY(fake->waitStarted()); // id 2 が実行に入る
+    fake->release();              // "a" が完了 → UI 側で破棄されること
+    QVERIFY(fake->waitStarted()); // "abcdef" が実行に入る
     fake->release();
 
     QTRY_COMPARE(spy.count(), 1);
@@ -150,8 +153,51 @@ void TestSearchController::staleResultDoesNotOverwriteNewerOne()
 
     // どちらも実行はされた。採用されたのは新しい方だけ。
     QCOMPARE(fake->executed(), QStringList({QStringLiteral("a"), QStringLiteral("abcdef")}));
-    QCOMPARE(resultsFrom(spy, 0).id, quint64(2));
     QCOMPARE(resultsFrom(spy, 0).rows.at(0).name, QStringLiteral("abcdef"));
+}
+
+// (3) デバウンス待ちの時間窓。A の実行中に検索欄が B へ変わったら、その時点で
+//     A は stale になる。B の dispatch を待ってから世代を進めると、その間に
+//     完了した A の結果が「検索欄は B なのに A の結果が描かれる」形で流れる。
+void TestSearchController::resultCompletingDuringDebounceIsDropped()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+
+    // A の完了を debounce 満了より前へ置くための余裕。なお B は gate で止まる
+    // ので、spy が埋まりうる経路は「A の結果が流れた」場合しかない。判定自体は
+    // タイミングに依存しない。
+    constexpr int kDebounceMs = 1000;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy spy(&controller, &efs::SearchController::resultsReady);
+
+    // A を即時 dispatch し、backend の中で止める。
+    controller.setText(QStringLiteral("A"));
+    controller.searchNow();
+    QVERIFY(fake->waitStarted());
+
+    // 検索欄が B になる。searchNow() は呼ばない = まだ debounce 待ち。
+    controller.setText(QStringLiteral("B"));
+
+    // debounce 満了より前に A を完了させる。
+    fake->release();
+
+    // A の結果は UI へ流れてはならない。
+    QTest::qWait(400);
+    QVERIFY2(spy.isEmpty(), "debounce 待ちの間に完了した古い結果が流れた");
+
+    // その後、debounce 満了により B が実行される。ここは semaphore で待てない —
+    // ブロックすると UI スレッドの event loop が止まり、debounce の QTimer が
+    // 発火しなくなる。event loop を回しながら、副作用の無い executed() で待つ。
+    QTRY_COMPARE(fake->executed(), QStringList({QStringLiteral("A"), QStringLiteral("B")}));
+    fake->release();
+
+    QTRY_COMPARE(spy.count(), 1);
+    QTest::qWait(50);
+    QCOMPARE(spy.count(), 1);
+
+    // A も B も実行はされたが、採用されたのは B だけ。
+    QCOMPARE(resultsFrom(spy, 0).rows.at(0).name, QStringLiteral("B"));
 }
 
 void TestSearchController::debounceCoalescesRapidInput()

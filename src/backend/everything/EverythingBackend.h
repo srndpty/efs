@@ -12,7 +12,8 @@
 namespace efs {
 
 // FILETIME (1601-01-01 UTC からの 100ns 単位) を現地時刻の QDateTime へ。
-// 0 および Unix エポック未満は無効な QDateTime を返す。
+// 無効を返すのは 0 (日時なし) と qint64 で表せない値だけ。1970 より前の日時は
+// 負の Unix epoch time として正しく変換する。
 // windows.h の型をヘッダに出さないため quint64 で受ける。
 [[nodiscard]] QDateTime fileTimeToDateTime(quint64 fileTime);
 

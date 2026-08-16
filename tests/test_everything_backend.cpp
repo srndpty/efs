@@ -6,6 +6,8 @@
 #include <QTimeZone>
 #include <QtTest>
 
+#include <limits>
+
 #include "backend/everything/EverythingBackend.h"
 #include "core/FileKinds.h"
 
@@ -61,10 +63,27 @@ void TestEverythingBackend::fileTimeToDateTime_data()
     QTest::addColumn<bool>("valid");
     QTest::addColumn<qint64>("msecsSinceEpoch");
 
-    // FILETIME の 0 は「日時なし」。Unix エポック未満も表示できないので無効扱い。
+    // FILETIME の 0 だけが「日時なし」。
     QTest::newRow("zero") << quint64(0) << false << qint64(0);
-    QTest::newRow("before unix epoch") << quint64(116444736000000000ULL - 1) << false << qint64(0);
+    // qint64 で表せない値は日時ではない。1601 年付近へ化けさせず無効を返す。
+    QTest::newRow("not a date (all bits set)")
+        << std::numeric_limits<quint64>::max() << false << qint64(0);
+
     QTest::newRow("unix epoch") << quint64(116444736000000000ULL) << true << qint64(0);
+    QTest::newRow("1 tick before unix epoch")
+        << quint64(116444736000000000ULL - 1) << true << qint64(0);
+    QTest::newRow("1s before unix epoch")
+        << quint64(116444736000000000ULL - 10000000ULL) << true << qint64(-1000);
+    // 1970 より前も負の Unix epoch time として正しく変換する。
+    const qint64 msecs1960 =
+        QDateTime(QDate(1960, 3, 4), QTime(5, 6, 7), QTimeZone::UTC).toMSecsSinceEpoch();
+    QTest::newRow("1960-03-04T05:06:07Z")
+        << quint64(116444736000000000ULL - static_cast<quint64>(-msecs1960) * 10000ULL) << true
+        << msecs1960;
+    // FILETIME の原点付近 (1601-01-01T00:00:00.001Z)。下端でも破綻しないこと。
+    QTest::newRow("filetime epoch + 1ms")
+        << quint64(10000) << true
+        << QDateTime(QDate(1601, 1, 1), QTime(0, 0, 0, 1), QTimeZone::UTC).toMSecsSinceEpoch();
     QTest::newRow("unix epoch + 1s")
         << quint64(116444736000000000ULL + 10000000ULL) << true << qint64(1000);
     // 実日時。期待値は QDateTime から導出し、テスト側で暦計算をしない。

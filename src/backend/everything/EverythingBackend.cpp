@@ -6,6 +6,7 @@
 #include <QTimeZone>
 #include <QtGlobal>
 
+#include <limits>
 #include <string>
 
 #include "Everything.h"
@@ -57,10 +58,18 @@ quint64 toQuint64(const FILETIME& fileTime)
 
 QDateTime fileTimeToDateTime(quint64 fileTime)
 {
-    if (fileTime < kFileTimeEpochDelta)
+    // 0 は「日時なし」。
+    if (fileTime == 0)
         return {};
-    const auto msecs = static_cast<qint64>((fileTime - kFileTimeEpochDelta) / 10000ULL);
-    return QDateTime::fromMSecsSinceEpoch(msecs, QTimeZone::UTC).toLocalTime();
+    // qint64 で表せない値は日時ではない (SDK が 0xFFFF... 等を返した場合)。
+    // 黙って 1601 年付近の値へ化けさせず、無効として返す。
+    if (fileTime > static_cast<quint64>(std::numeric_limits<qint64>::max()))
+        return {};
+
+    // 1970 より前は負の Unix epoch time になる。QDateTime は表現できるので、
+    // 切り捨てずにそのまま変換する。
+    const qint64 ticks = static_cast<qint64>(fileTime) - static_cast<qint64>(kFileTimeEpochDelta);
+    return QDateTime::fromMSecsSinceEpoch(ticks / 10000, QTimeZone::UTC).toLocalTime();
 }
 
 QString EverythingBackend::name() const

@@ -46,10 +46,14 @@ void SearchController::setText(const QString& text)
         return;
     m_query.text = text;
 
+    // 入力が変わった時点で世代を進め、実行中/キュー内の検索をただちに stale に
+    // する。dispatch() まで待つと「debounce 待ちの間に古い検索が完了し、検索欄と
+    // 食い違う結果が描画される」時間窓ができる。
+    startNewGeneration();
+
     if (m_query.text.trimmed().isEmpty()) {
-        // 空入力では検索しない。世代だけ進めて、実行中/キュー内の結果を無効化する。
+        // 空入力では検索しない。世代を進めるだけで結果は捨てられる。
         m_debounce->stop();
-        startNewGeneration();
         emit cleared();
         return;
     }
