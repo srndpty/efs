@@ -270,6 +270,10 @@ buildQueryString(q) =
 
 **確定方針: Regex ON のテキスト項は `regex:"<入力>"` とする。** パターン内部のエスケープは補わない (パターン自体が `"` を含む場合は壊れるが、NTFS のファイル名に `"` は入らないので実用上意味が無い)。詳細な観測値は README の「Phase 2 の検証結果」に記録した。回帰テストは `p2RegressionRegexWithSpaceIsQuoted` (単体) と `regexWithSpaceIsOneTerm` (実機・陽性 + 陰性対照)。
 
+**空白の扱いは Regex の ON/OFF で異なる (P2 review で確定)**: 引用の内側では前後の空白も TAB も意味を持つため、**Regex ON ではユーザーのパターンを一字も変えない**。Regex OFF の前後空白は Everything の項区切りでしかないので trim する。「テキスト条件なし」の判定も同じ契約に揃える — Regex ON では空文字だけが条件なしで、**空白だけのパターン (`" "` = 名前に空白を含む) は有効な検索条件**。`buildQueryString()` と `hasSearchConstraint()` がずれると「条件はあるのにクエリが空」になるため、両者を同じ入力で突き合わせるテスト (`regexWhitespaceContractMatchesHasSearchConstraint`) で固定してある。
+
+**種別フィルタは hard constraint とする (P2 review で確定)**: Everything は演算子の優先順位を設定で変更できるため、`ext:... a|b` のままだと種別項が OR の片側からしか掛からない可能性がある。実測では**現在の既定設定で `|` は空白 (AND) より強く結合しており破綻していない**が、設定に依存させないため、種別項があり Regex OFF のときはユーザー式全体を Everything のグルーピング `<...>` で囲む。`( )` はグルーピングではない (括弧を含む名前を探しに行く) ことも実測で確認した。`<>` を被せても結果が変わらないことを AND / OR / 否定 / 引用 / ワイルドカード / inline regex / 入れ子 `<>` / 不均衡な `<` `>` / 他の修飾子の 13 ケースで確認済み (README)。パーサやフォールバックは作らない。
+
 **不正な正規表現は検出できない。** Everything は構文エラーを返さず、単に 0 件を返す (`GetLastError()` は `EVERYTHING_OK`)。したがって「Regex が壊れている」ことを backend から知る手段は無く、`SearchResults::error` にも載らない。検索欄を赤くする等の error UX は Phase 3 で UI 側の判断として実装するしかない。
 
 ### 6.3 `EverythingBackend::search()` — 1クエリの手順

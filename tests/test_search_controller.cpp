@@ -105,6 +105,7 @@ private slots:
     void regexChangeSearchesImmediately();
     void sortChangePropagatesImmediately();
     void redundantStateChangesIssueNoQuery();
+    void whitespaceOnlyTextSearchesOnlyWithRegex();
     void stateChangeInvalidatesRunningSearch_data();
     void stateChangeInvalidatesRunningSearch();
 };
@@ -276,28 +277,44 @@ void TestSearchController::hasSearchConstraint_data()
 {
     QTest::addColumn<QString>("text");
     QTest::addColumn<efs::FileKind>("kind");
+    QTest::addColumn<bool>("regex");
     QTest::addColumn<bool>("expected");
 
-    QTest::newRow("empty + All") << QString() << efs::FileKind::All << false;
-    QTest::newRow("whitespace + All") << QStringLiteral(" \t ") << efs::FileKind::All << false;
-    QTest::newRow("text + All") << QStringLiteral("a") << efs::FileKind::All << true;
-    QTest::newRow("empty + Image") << QString() << efs::FileKind::Image << true;
-    QTest::newRow("empty + Video") << QString() << efs::FileKind::Video << true;
-    QTest::newRow("empty + Audio") << QString() << efs::FileKind::Audio << true;
-    QTest::newRow("empty + Document") << QString() << efs::FileKind::Document << true;
-    QTest::newRow("empty + Directory") << QString() << efs::FileKind::Directory << true;
-    QTest::newRow("text + Image") << QStringLiteral("a") << efs::FileKind::Image << true;
+    QTest::newRow("empty + All") << QString() << efs::FileKind::All << false << false;
+    QTest::newRow("whitespace + All")
+        << QStringLiteral(" \t ") << efs::FileKind::All << false << false;
+    QTest::newRow("text + All") << QStringLiteral("a") << efs::FileKind::All << false << true;
+    QTest::newRow("empty + Image") << QString() << efs::FileKind::Image << false << true;
+    QTest::newRow("empty + Video") << QString() << efs::FileKind::Video << false << true;
+    QTest::newRow("empty + Audio") << QString() << efs::FileKind::Audio << false << true;
+    QTest::newRow("empty + Document") << QString() << efs::FileKind::Document << false << true;
+    QTest::newRow("empty + Directory") << QString() << efs::FileKind::Directory << false << true;
+    QTest::newRow("text + Image") << QStringLiteral("a") << efs::FileKind::Image << false << true;
+
+    // Regex ON では空白もパターンの一部。空文字だけが「条件なし」。
+    QTest::newRow("regex + empty + All") << QString() << efs::FileKind::All << true << false;
+    QTest::newRow("regex + one space + All")
+        << QStringLiteral(" ") << efs::FileKind::All << true << true;
+    QTest::newRow("regex + multiple spaces + All")
+        << QStringLiteral("   ") << efs::FileKind::All << true << true;
+    QTest::newRow("regex + tab + All")
+        << QStringLiteral("\t") << efs::FileKind::All << true << true;
+    QTest::newRow("regex + leading space + All")
+        << QStringLiteral(" a") << efs::FileKind::All << true << true;
+    QTest::newRow("regex + empty + Image") << QString() << efs::FileKind::Image << true << true;
 }
 
 void TestSearchController::hasSearchConstraint()
 {
     QFETCH(QString, text);
     QFETCH(efs::FileKind, kind);
+    QFETCH(bool, regex);
     QFETCH(bool, expected);
 
     efs::SearchQuery query;
     query.text = text;
     query.kind = kind;
+    query.regex = regex;
     QCOMPARE(efs::hasSearchConstraint(query), expected);
 }
 
@@ -472,6 +489,37 @@ void TestSearchController::redundantStateChangesIssueNoQuery()
 
     QTest::qWait(4 * kDebounceMs);
     QCOMPARE(fake->queries().size(), 4);
+}
+
+// 空白だけの入力は、Regex OFF では検索条件にならず、Regex ON では有効な
+// パターン (「名前に空白を含む」) になる。SearchController がこの契約どおりに
+// 振る舞うこと。
+void TestSearchController::whitespaceOnlyTextSearchesOnlyWithRegex()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy clearedSpy(&controller, &efs::SearchController::cleared);
+
+    // Regex OFF: 空白だけでは検索しない。
+    controller.setText(QStringLiteral(" "));
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(fake->queries().size(), 0);
+    QCOMPARE(clearedSpy.count(), 1);
+
+    // Regex ON にした時点で、同じ空白だけの入力が有効な検索条件になる。
+    controller.setRegex(true);
+    QTRY_COMPARE(fake->queries().size(), 1);
+    QCOMPARE(fake->queries().at(0).text, QStringLiteral(" "));
+    QVERIFY(fake->queries().at(0).regex);
+
+    // Regex を戻すと再び「条件なし」。
+    controller.setRegex(false);
+    QTRY_COMPARE(clearedSpy.count(), 2);
+    QCOMPARE(fake->queries().size(), 1);
 }
 
 // 状態変更の経路が増えても stale 破棄が成立すること。実行中の検索は

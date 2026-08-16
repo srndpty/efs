@@ -35,6 +35,8 @@ private slots:
     void filterOnlyQueryReturnsMatchingExtensions_data();
     void filterOnlyQueryReturnsMatchingExtensions();
     void regexWithSpaceIsOneTerm();
+    void regexWhitespaceIsNotTrimmed();
+    void fileKindConstrainsOrExpressions();
     void sortIsAppliedByBackend();
     void sortAppliesToWholeResultSetNotJustReturnedRows();
 
@@ -330,6 +332,93 @@ void TestEverythingBackend::regexWithSpaceIsOneTerm()
     QVERIFY(negativeResults.rows.isEmpty());
 }
 
+// Regex ON のパターンは前後の空白も含めて一字も変えずに渡ること。
+//
+// 陽性: パターン " " (空白 1 個だけ) は「名前に空白を含む」という有効な条件。
+//       trim すると空パターンになり、テキスト項ごと消えて意味が変わる。
+// 対照: 同じ入力で Regex OFF なら 0 件 (Everything 側で項にならない)。
+void TestEverythingBackend::regexWhitespaceIsNotTrimmed()
+{
+    SKIP_WITHOUT_EVERYTHING();
+
+    efs::SearchQuery spaceOnly;
+    spaceOnly.regex = true;
+    spaceOnly.text = QStringLiteral(" ");
+    spaceOnly.maxResults = 100;
+    const efs::SearchResults spaceResults = m_backend.search(spaceOnly);
+
+    QVERIFY(spaceResults.error.isEmpty());
+    if (spaceResults.rows.isEmpty())
+        QSKIP("この環境に空白を含むファイル名が見つからない");
+    // 全行の名前に空白が含まれること。trim されて空パターンになっていたら、
+    // 空白を含まない名前が返る。
+    for (const efs::ResultRow& row : spaceResults.rows)
+        QVERIFY2(row.name.contains(u' '), qPrintable(row.name));
+
+    // 先頭に空白のあるパターンも保持されること。実在する名前から作る。
+    const QString name = spaceResults.rows.first().name;
+    const qsizetype firstSpace = name.indexOf(u' ');
+    QVERIFY(firstSpace >= 0);
+    const QString tail = name.mid(firstSpace); // 必ず空白で始まる
+
+    QString escaped;
+    for (const QChar ch : tail) {
+        if (QStringLiteral("\\^$.|?*+()[]{}").contains(ch))
+            escaped += u'\\';
+        escaped += ch;
+    }
+
+    efs::SearchQuery leadingSpace;
+    leadingSpace.regex = true;
+    leadingSpace.text = escaped + u'$';
+    leadingSpace.maxResults = 100;
+    const efs::SearchResults leadingResults = m_backend.search(leadingSpace);
+
+    QVERIFY(leadingResults.error.isEmpty());
+    QVERIFY2(!leadingResults.rows.isEmpty(), qPrintable(leadingSpace.text));
+    // 先頭の空白が落ちていれば、空白の無い名前も一致しうる。全行が空白込みの
+    // 末尾を持つことを確認する。
+    for (const efs::ResultRow& row : leadingResults.rows)
+        QVERIFY2(row.name.endsWith(tail, Qt::CaseInsensitive), qPrintable(row.name));
+}
+
+// 種別フィルタは hard constraint。ユーザーが OR 式を書いても、返る行は
+// すべて種別条件を満たすこと (計画 6.2 / P2 review)。
+void TestEverythingBackend::fileKindConstrainsOrExpressions()
+{
+    SKIP_WITHOUT_EVERYTHING();
+
+    efs::SearchQuery query;
+    query.kind = efs::FileKind::Image;
+    // 片方だけでは画像に当たりにくい語を OR で並べる。優先順位が崩れて種別が
+    // OR の片側から外れると、画像でない行が混ざる。
+    query.text = QStringLiteral("a|b");
+    query.maxResults = 200;
+    const efs::SearchResults results = m_backend.search(query);
+
+    QVERIFY(results.error.isEmpty());
+    if (results.rows.isEmpty())
+        QSKIP("この環境には Image 種別のファイルが無い");
+
+    const QStringList extensions = efs::extensionsFor(efs::FileKind::Image);
+    for (const efs::ResultRow& row : results.rows) {
+        QVERIFY2(!row.isDir, qPrintable(row.name));
+        QVERIFY2(extensions.contains(row.name.section(u'.', -1).toLower()), qPrintable(row.name));
+        // OR のどちらかには一致していること (種別だけで通っていない)。
+        QVERIFY2(row.name.contains(u'a', Qt::CaseInsensitive) ||
+                     row.name.contains(u'b', Qt::CaseInsensitive),
+                 qPrintable(row.name));
+    }
+
+    // folder: 側も同じ扱いであること。
+    efs::SearchQuery directories = query;
+    directories.kind = efs::FileKind::Directory;
+    const efs::SearchResults directoryResults = m_backend.search(directories);
+    QVERIFY(directoryResults.error.isEmpty());
+    for (const efs::ResultRow& row : directoryResults.rows)
+        QVERIFY2(row.isDir, qPrintable(row.name));
+}
+
 // 打ち切りが起きない小さな結果集合で、ソート指定が backend に効いていること。
 // 文字列の照合順序 (Everything の collation) には踏み込まず、Asc と Desc が
 // 互いの逆順であることだけを見る。
@@ -342,11 +431,11 @@ void TestEverythingBackend::sortIsAppliedByBackend()
     query.text = QStringLiteral("EverythingQueryBuilder");
     query.maxResults = 5000;
 
-    const auto namesOf = [](const efs::SearchResults& results) {
-        QStringList names;
+    const auto keysOf = [](const efs::SearchResults& results, efs::SortKey key) {
+        QStringList keys;
         for (const efs::ResultRow& row : results.rows)
-            names << row.name;
-        return names;
+            keys << (key == efs::SortKey::Name ? row.name : row.path);
+        return keys;
     };
 
     for (const efs::SortKey key : {efs::SortKey::Name, efs::SortKey::Path}) {
@@ -364,11 +453,29 @@ void TestEverythingBackend::sortIsAppliedByBackend()
         descending.sortOrder = efs::SortOrder::Desc;
         const efs::SearchResults descendingResults = m_backend.search(descending);
         QVERIFY(descendingResults.error.isEmpty());
-        QCOMPARE(descendingResults.rows.size(), ascendingResults.rows.size());
+        // 行数は「ほぼ同じ」しか要求しない。live index なので 2 回のクエリの間に
+        // ファイルが増減しうる (実測でも 1 件の変動を観測している)。
+        if (descendingResults.rows.size() != ascendingResults.rows.size())
+            QSKIP("2 回のクエリの間に索引が変化した");
 
-        QStringList reversed = namesOf(descendingResults);
+        const QStringList ascendingKeys = keysOf(ascendingResults, key);
+        QStringList reversed = keysOf(descendingResults, key);
         std::reverse(reversed.begin(), reversed.end());
-        QCOMPARE(reversed, namesOf(ascendingResults));
+
+        // Everything の照合順序 (大小・数値・ロケールの扱い) には踏み込まない。
+        // キーが一意なら「Desc の逆順 == Asc」が照合順序に依らず成立する。
+        // 同値キーがあると tie の並びは規定されないので、その場合は集合として
+        // 一致することだけを要求する。
+        const QSet<QString> unique(ascendingKeys.begin(), ascendingKeys.end());
+        if (unique.size() == ascendingKeys.size()) {
+            QCOMPARE(reversed, ascendingKeys);
+        } else {
+            QStringList sortedAscending = ascendingKeys;
+            QStringList sortedDescending = reversed;
+            sortedAscending.sort();
+            sortedDescending.sort();
+            QCOMPARE(sortedDescending, sortedAscending);
+        }
     }
 
     // サイズ・日時は単調性で見る (同値が並ぶので逆順比較はできない)。
@@ -426,14 +533,20 @@ void TestEverythingBackend::sortAppliesToWholeResultSetNotJustReturnedRows()
     const efs::SearchResults bySizeResults = m_backend.search(bySize);
     QVERIFY(bySizeResults.error.isEmpty());
     QVERIFY(!bySizeResults.rows.isEmpty());
-    QCOMPARE(bySizeResults.totalMatches, byNameResults.totalMatches);
+    // totalMatches の厳密一致は要求しない。live index なので 2 回のクエリの間に
+    // 件数が動く (実測で 1 件の変動を観測している)。
 
-    // 名前順の先頭 5,000 行に含まれる最大サイズより、サイズ降順の先頭が
-    // 小さいことはありえない。局所ソートに退化すると、ここが崩れる。
-    QVERIFY2(bySizeResults.rows.first().size >= largestOnFirstPage,
-             qPrintable(QStringLiteral("size desc top=%1 name asc page max=%2")
-                            .arg(bySizeResults.rows.first().size)
-                            .arg(largestOnFirstPage)));
+    // 名前順の先頭 5,000 行に含まれる最大サイズと、サイズ降順の先頭を比べる。
+    //   >  : 打ち切られた 5,000 行の外にあるファイルが先頭に来た = 全体ソートの証拠
+    //   == : このデータでは全体ソートと局所ソートを区別できない (偶然、名前順の
+    //        先頭ページに全体の最大サイズが含まれていた場合)。判定不能なので skip。
+    //   <  : 全体の最大より小さいものが先頭に来た = ソートが全体に効いていない
+    const qint64 top = bySizeResults.rows.first().size;
+    const QString detail =
+        QStringLiteral("size desc top=%1 / name asc page max=%2").arg(top).arg(largestOnFirstPage);
+    QVERIFY2(top >= largestOnFirstPage, qPrintable(detail));
+    if (top == largestOnFirstPage)
+        QSKIP(qPrintable(QStringLiteral("全体ソートと局所ソートを識別できない (%1)").arg(detail)));
 }
 
 QTEST_GUILESS_MAIN(TestEverythingBackend)

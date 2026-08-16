@@ -97,15 +97,20 @@ void applyDarkTitleBar(QWidget* window)
     if (!window)
         return;
 
-    // DWMWA_USE_IMMERSIVE_DARK_MODE。Windows 10 20H1 以降で 20。それ以前の
-    // ビルドでは失敗するだけで、タイトルバーが明るいまま残る (害は無い)。
-    constexpr DWORD kUseImmersiveDarkMode = 20;
+    // DWMWA_USE_IMMERSIVE_DARK_MODE は Windows SDK 10.0.22000 以降の dwmapi.h が
+    // DWMWINDOWATTRIBUTE として定義している (このリポジトリの対象 SDK は
+    // 10.0.26100)。値をハードコードせずシンボルを使う。
+    //
+    // **best-effort。** この属性の挙動について Microsoft は互換性を保証して
+    // おらず、対応しない環境では DwmSetWindowAttribute が失敗してタイトルバーが
+    // 明るいまま残るだけ (害は無いので戻り値は見ない)。Windows 11 26200 で
+    // 実際に暗くなることは確認済み。それ以上の強制 Dark 化は Phase 3 まで行わない。
     const BOOL enabled = TRUE;
     // QWidget::winId() は WId (quintptr) を返すので、HWND へ戻すには整数から
     // ポインタへのキャストしか無い。Qt と Win32 の境界そのもの。
     // NOLINTNEXTLINE(performance-no-int-to-ptr)
     auto* handle = reinterpret_cast<HWND>(window->winId());
-    ::DwmSetWindowAttribute(handle, kUseImmersiveDarkMode, &enabled, sizeof(enabled));
+    ::DwmSetWindowAttribute(handle, DWMWA_USE_IMMERSIVE_DARK_MODE, &enabled, sizeof(enabled));
 }
 
 } // namespace efs

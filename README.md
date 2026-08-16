@@ -180,6 +180,41 @@ NTFS のファイル名に `"` は入れられないので実用上意味が無�
 TAB もファイル名に入れられない (プローブ作成時に win32 が拒否した) ため、
 「TAB 入り Regex」は引用の内側に入ることだけを保証すれば十分。
 
+**Regex ON ではユーザーのパターンを一字も変えない (前後の空白を含む)。** 引用の
+内側では先頭/末尾の空白も TAB も意味を持つ (上の I9 / I11)。したがって:
+
+| | Regex OFF | Regex ON |
+|---|---|---|
+| 前後の空白 | trim する (Everything の項区切りでしかない) | **保持する** |
+| 「テキスト条件なし」の判定 | trim して空 | **空文字のときだけ** |
+| 空白だけの入力 | 検索しない | **有効な条件** (`regex:" "` = 名前に空白を含む) |
+
+`buildQueryString()` と `core/SearchTypes.h` の `hasSearchConstraint()` は同じ契約で
+なければならない (片方だけ変えると「条件はあるのにクエリが空」になる)。両者を
+同じ入力で突き合わせる `regexWhitespaceContractMatchesHasSearchConstraint` で固定した。
+
+### FileKind + OR 式の演算子優先順位 — 種別は hard constraint にする
+
+Everything は演算子の優先順位を設定で変更できるため、`ext:... a|b` のまま渡すと
+種別項が OR の片側からしか掛からない懸念があった。プローブ
+(`efsor alpha.jpg` / `efsor alphabeta.jpg` / `efsor gamma.png` / `efsor beta.txt` /
+`efsor delta.mp3`) で実測した結果:
+
+- **現在の既定設定では `|` が空白 (AND) より強く結合しており、懸念した破綻は
+  起きていない。** `ext:<image> alpha|beta` は `efsor beta.txt` を返さない。
+- **`( )` はグルーピングではない。** `ext:<image> (alpha|beta)` は括弧を含む名前を
+  探しに行き、プローブに 1 件も当たらなかった。Everything 1.4 のグルーピングは `< >`。
+- `< >` で囲んでも結果は変わらない。単語 / AND / OR / 否定 `!` / 引用 `"..."` /
+  ワイルドカード `*` `?` / inline `regex:` / 既に `<>` を含む入力 / 不均衡な `<` `>` /
+  他の修飾子 (`path:`) の **13 ケースすべてで、raw と `<>` 版の totalMatches と
+  ヒット内容が完全一致**した (`folder:` 側の 2 ケースも同じ)。
+
+**決定: 種別項があり Regex OFF のときは、ユーザー式全体を `<...>` で囲む。**
+現在の設定では no-op だが、優先順位設定に依存せず「ツールバーで選んだ種別は必ず
+効く」ことを保証できる。実測で無害と確認できた範囲だけの最小の変更で、
+パーサやフォールバックは作らない。Regex 項は引用済みの 1 項なので囲まない。
+`FileKind::All` のときは種別項が無いので囲まない。
+
 回帰テストは `tests/test_query_builder.cpp` の `p2RegressionRegexWithSpaceIsQuoted` と
 `tests/test_everything_backend.cpp` の `regexWithSpaceIsOneTerm` (実機・陽性 + 陰性対照)。
 後者は引用を外すと実際に FAIL することを確認済み。

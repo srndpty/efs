@@ -22,6 +22,9 @@ private slots:
     void buildsExpectedQuery();
     void p0RegressionExtPlusRegex();
     void p2RegressionRegexWithSpaceIsQuoted();
+    void fileKindIsAHardConstraint();
+    void regexWhitespaceContractMatchesHasSearchConstraint_data();
+    void regexWhitespaceContractMatchesHasSearchConstraint();
     void extensionListsAreDistinctAndLowerCase_data();
     void extensionListsAreDistinctAndLowerCase();
 };
@@ -57,8 +60,28 @@ void TestQueryBuilder::buildsExpectedQuery_data()
     QTest::newRow("regex on") << QStringLiteral("^IMG_\\d+") << FileKind::All << true
                               << QStringLiteral("regex:\"^IMG_\\d+\"");
     QTest::newRow("regex on with empty text") << QString() << FileKind::All << true << QString();
-    QTest::newRow("regex on with whitespace only text")
-        << QStringLiteral(" \t ") << FileKind::All << true << QString();
+
+    // --- Regex ON の空白はユーザーのパターンの一部。trim してはならない --------
+    // 引用の内側では前後の空白も TAB も意味を持つことを実測済み。空文字だけが
+    // 「テキスト条件なし」で、空白だけのパターンは有効な検索条件。
+    QTest::newRow("regex leading space is preserved")
+        << QStringLiteral(" alpha") << FileKind::All << true << QStringLiteral("regex:\" alpha\"");
+    QTest::newRow("regex trailing space is preserved")
+        << QStringLiteral("alpha ") << FileKind::All << true << QStringLiteral("regex:\"alpha \"");
+    QTest::newRow("regex leading and trailing space are preserved")
+        << QStringLiteral("  ^a b  ") << FileKind::All << true
+        << QStringLiteral("regex:\"  ^a b  \"");
+    QTest::newRow("regex one space only")
+        << QStringLiteral(" ") << FileKind::All << true << QStringLiteral("regex:\" \"");
+    QTest::newRow("regex multiple spaces only")
+        << QStringLiteral("   ") << FileKind::All << true << QStringLiteral("regex:\"   \"");
+    QTest::newRow("regex tab only")
+        << QStringLiteral("\t") << FileKind::All << true << QStringLiteral("regex:\"\t\"");
+    QTest::newRow("regex mixed whitespace only")
+        << QStringLiteral(" \t ") << FileKind::All << true << QStringLiteral("regex:\" \t \"");
+    QTest::newRow("regex whitespace only + FileKind")
+        << QStringLiteral(" ") << FileKind::Image << true
+        << kImageExt + QStringLiteral(" regex:\" \"");
 
     // --- Regex ON + 空白 (Phase 2 の中心仕様) ---------------------------------
     QTest::newRow("regex with one space") << QStringLiteral("^IMG \\d+") << FileKind::All << true
@@ -72,9 +95,6 @@ void TestQueryBuilder::buildsExpectedQuery_data()
     //  別のものが引っかかる方が悪い。実測で raw な TAB は分割された。)
     QTest::newRow("regex with tab inside")
         << QStringLiteral("a\tb") << FileKind::All << true << QStringLiteral("regex:\"a\tb\"");
-    // 前後の空白は Regex ON でも落とす (Regex OFF と同じ扱い)。
-    QTest::newRow("regex text is trimmed")
-        << QStringLiteral("  ^a b  ") << FileKind::All << true << QStringLiteral("regex:\"^a b\"");
     QTest::newRow("regex with space + FileKind")
         << QStringLiteral("^IMG \\d+") << FileKind::Image << true
         << kImageExt + QStringLiteral(" regex:\"^IMG \\d+\"");
@@ -104,10 +124,25 @@ void TestQueryBuilder::buildsExpectedQuery_data()
                                << QStringLiteral("folder:");
 
     // --- 種別 + テキスト ------------------------------------------------------
+    // 種別項があるときは、ユーザー式を <> で囲んで種別を外側の AND に固定する
+    // (演算子の優先順位設定に依らず種別を hard constraint にするため)。
     QTest::newRow("Image + text") << QStringLiteral("holiday") << FileKind::Image << false
-                                  << kImageExt + QStringLiteral(" holiday");
+                                  << kImageExt + QStringLiteral(" <holiday>");
     QTest::newRow("Directory + text") << QStringLiteral("build") << FileKind::Directory << false
-                                      << QStringLiteral("folder: build");
+                                      << QStringLiteral("folder: <build>");
+    QTest::newRow("Image + OR expression is grouped")
+        << QStringLiteral("holiday|vacation") << FileKind::Image << false
+        << kImageExt + QStringLiteral(" <holiday|vacation>");
+    QTest::newRow("Image + AND expression is grouped")
+        << QStringLiteral("holiday 2026") << FileKind::Image << false
+        << kImageExt + QStringLiteral(" <holiday 2026>");
+    QTest::newRow("Image + negation is grouped")
+        << QStringLiteral("!draft") << FileKind::Image << false
+        << kImageExt + QStringLiteral(" <!draft>");
+    // All のときは種別項が無いので囲む理由が無い。クエリを無駄に飾らない。
+    QTest::newRow("All + OR expression is not grouped")
+        << QStringLiteral("holiday|vacation") << FileKind::All << false
+        << QStringLiteral("holiday|vacation");
 
     // --- 種別 + Regex (Phase 0 で実機確定した形) ------------------------------
     QTest::newRow("Image + regex") << QStringLiteral("^a00") << FileKind::Image << true
@@ -124,7 +159,7 @@ void TestQueryBuilder::buildsExpectedQuery_data()
         << QStringLiteral("^(a|b)[0-9]{2}\\.txt$") << FileKind::All << true
         << QStringLiteral("regex:\"^(a|b)[0-9]{2}\\.txt$\"");
     QTest::newRow("non ascii text") << QStringLiteral("報告書") << FileKind::Document << false
-                                    << kDocumentExt + QStringLiteral(" 報告書");
+                                    << kDocumentExt + QStringLiteral(" <報告書>");
 }
 
 void TestQueryBuilder::buildsExpectedQuery()
@@ -195,6 +230,63 @@ void TestQueryBuilder::p2RegressionRegexWithSpaceIsQuoted()
     const QString withKind = efs::buildQueryString(query);
     QVERIFY(withKind.startsWith(QStringLiteral("ext:")));
     QVERIFY(withKind.endsWith(QStringLiteral(" regex:\"^IMG \\d+\"")));
+}
+
+// 種別フィルタは hard constraint。ユーザー式に OR が含まれていても、種別項が
+// OR の片側にしか掛からない形へ退化していないこと。
+void TestQueryBuilder::fileKindIsAHardConstraint()
+{
+    SearchQuery query;
+    query.kind = FileKind::Image;
+    query.text = QStringLiteral("alpha|beta");
+
+    const QString built = efs::buildQueryString(query);
+
+    QVERIFY(built.startsWith(QStringLiteral("ext:")));
+    // ユーザー式全体がグルーピングの内側にあること。
+    QVERIFY2(built.endsWith(QStringLiteral(" <alpha|beta>")), qPrintable(built));
+    // OR がグルーピングの外へ漏れていないこと。
+    const qsizetype openGroup = built.indexOf(u'<');
+    const qsizetype closeGroup = built.lastIndexOf(u'>');
+    QVERIFY(openGroup > built.indexOf(QStringLiteral("ext:")));
+    QVERIFY(built.indexOf(u'|') > openGroup);
+    QVERIFY(built.indexOf(u'|') < closeGroup);
+}
+
+// buildQueryString() と hasSearchConstraint() は空白について同じ契約でなければ
+// ならない。ずれると「検索条件はあると判定したのにクエリが空」あるいはその逆に
+// なる。両者を同じ入力で突き合わせて固定する。
+void TestQueryBuilder::regexWhitespaceContractMatchesHasSearchConstraint_data()
+{
+    QTest::addColumn<QString>("text");
+    QTest::addColumn<bool>("regex");
+    QTest::addColumn<bool>("expectConstraint");
+
+    QTest::newRow("regex off, empty") << QString() << false << false;
+    QTest::newRow("regex off, space only") << QStringLiteral(" ") << false << false;
+    QTest::newRow("regex off, tab only") << QStringLiteral("\t") << false << false;
+    QTest::newRow("regex off, text") << QStringLiteral("a") << false << true;
+    QTest::newRow("regex on, empty") << QString() << true << false;
+    QTest::newRow("regex on, space only") << QStringLiteral(" ") << true << true;
+    QTest::newRow("regex on, multiple spaces only") << QStringLiteral("   ") << true << true;
+    QTest::newRow("regex on, tab only") << QStringLiteral("\t") << true << true;
+    QTest::newRow("regex on, leading space") << QStringLiteral(" a") << true << true;
+    QTest::newRow("regex on, trailing space") << QStringLiteral("a ") << true << true;
+}
+
+void TestQueryBuilder::regexWhitespaceContractMatchesHasSearchConstraint()
+{
+    QFETCH(QString, text);
+    QFETCH(bool, regex);
+    QFETCH(bool, expectConstraint);
+
+    SearchQuery query; // kind は All のまま (テキストだけで判定させる)
+    query.text = text;
+    query.regex = regex;
+
+    QCOMPARE(efs::hasSearchConstraint(query), expectConstraint);
+    // 「条件あり」と判定したなら、クエリ文字列も空であってはならない。
+    QCOMPARE(!efs::buildQueryString(query).isEmpty(), expectConstraint);
 }
 
 void TestQueryBuilder::extensionListsAreDistinctAndLowerCase_data()

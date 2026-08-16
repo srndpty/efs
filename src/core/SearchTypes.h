@@ -35,10 +35,19 @@ struct SearchQuery {
 //
 // backend 非依存に判定する。SearchController から buildQueryString() を呼んで
 // 空判定する設計にはしない (UI 側の状態機械が Everything 固有の文字列組み立てに
-// 依存してしまうため)。判定規則は「テキストが実質空 かつ FileKind::All」だけ。
+// 依存してしまうため)。
+//
+// 空白の扱いは Regex の ON/OFF で異なる。EverythingQueryBuilder と同じ契約に
+// 揃えること (片方だけ変えると「検索条件はあるのにクエリが空」になる):
+//   Regex OFF — 前後の空白は意味を持たないので trim してから判定する。
+//   Regex ON  — パターンの空白は意味を持つ (引用の内側で保持される)。
+//               空文字だけを「テキスト条件なし」とし、空白だけのパターンは
+//               有効な検索条件として扱う。
 [[nodiscard]] inline bool hasSearchConstraint(const SearchQuery& query)
 {
-    return query.kind != FileKind::All || !query.text.trimmed().isEmpty();
+    if (query.kind != FileKind::All)
+        return true;
+    return query.regex ? !query.text.isEmpty() : !query.text.trimmed().isEmpty();
 }
 
 struct ResultRow {
