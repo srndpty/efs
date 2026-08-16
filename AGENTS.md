@@ -25,9 +25,10 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 ## 設計方針
 
 ### DRY
-- 同じ判断が 2 箇所に現れたら、その時点で 1 箇所へ寄せる。
-- ただし**「3 回目までは重複を許す」**。1 回の重複で抽象化を作ると、
-  たいてい間違った抽象になる。
+- **2 箇所までは重複を許し、3 箇所目が現れた時点で共通化を検討する。**
+  1 回の重複で抽象化を作ると、たいてい間違った抽象になる。
+- ただし「仕様そのもの」が重複している場合は 2 箇所目でも寄せる
+  (例: 拡張子リスト、エラーコードの写像)。ずれると壊れるため。
 
 ### 責務の分離
 守るべき境界は少数。これらは実際に効くので厳格に守る。
@@ -35,7 +36,7 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 | 境界 | 規則 |
 |---|---|
 | UI ↔ 検索バックエンド | UI コードは `Everything.h` を include しない。`ISearchBackend` 越しにのみ触る。 |
-| Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下のみ。 |
+| Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下と、SDK 自体を直接検証する `tests/`・`src/spike/` のみ。SDK の include パスは `efs_core` の **PRIVATE** に置き、リンクしただけでは伝播させない。 |
 | スレッド | Everything SDK の呼び出しは検索スレッド 1 本に直列化する。SDK はグローバル状態を持つのでスレッドプール化は禁止。 |
 | 純粋関数 | クエリ組み立て・書式整形は Qt 以外に依存しない自由関数にし、単体テストの主戦場にする。 |
 
@@ -69,6 +70,8 @@ src/backend/everything/   Everything SDK の唯一の利用箇所
 src/app/                  Qt Widgets の UI
 src/spike/                Phase 0 限定の調査用。Phase 1 で削除する
 tests/                    QtTest。ctest に登録
+docs/                     implementation-plan.md (計画の authority)
+scripts/                  補助スクリプト
 third_party/              ベンダリングした Everything SDK。整形・lint の対象外
 ```
 
@@ -139,8 +142,7 @@ pwsh scripts/coverage.ps1
 
 ## フェーズ
 
-計画の authority は
-`C:\Users\lambe\.claude\plans\windows-everything-file-swirling-canyon.md`。
+計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 現在 **Phase 0 (walking skeleton) 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |

@@ -125,15 +125,21 @@ jobs:
       - name: Run coverage
         run: |
           $env:PATH = "C:\Program Files\OpenCppCoverage;$env:PATH"
+          $env:QT_ASSUME_STDERR_HAS_CONSOLE = '1'
           OpenCppCoverage.exe --sources "$PWD\src" `
             --excluded_sources "$PWD\third_party" --excluded_sources "$PWD\tests" `
             --export_type "cobertura:build\coverage.xml" `
             --export_type "html:build\coverage-html" `
             -- build\ci\tests\efs_tests.exe
+          if ($LASTEXITCODE -ne 0) { throw "OpenCppCoverage failed with $LASTEXITCODE" }
+          foreach ($f in @("build\coverage.xml", "build\coverage-html\index.html")) {
+            if (-not (Test-Path $f)) { throw "coverage output missing: $f" }
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: coverage
+          if-no-files-found: error
           path: |
             build/coverage.xml
             build/coverage-html

@@ -5,6 +5,8 @@ CMakeUserPresets.json
 
 # Tooling logs
 aqtinstall.log
+# OpenCppCoverage は実行時の作業ディレクトリにログを吐く
+LastCoverageResults.log
 
 # Visual Studio / VS Code
 .vs/

@@ -40,9 +40,12 @@ add_library(efs_core STATIC
     src/backend/everything/EverythingApi.h
     src/backend/everything/EverythingApi.cpp
 )
-target_include_directories(efs_core PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    "${EFS_EVERYTHING_SDK_DIR}"
+# src は PUBLIC (利用側が EverythingApi.h を include する)。
+# Everything SDK は PRIVATE。これを PUBLIC にすると efs_core にリンクするだけで
+# Everything.h が include できてしまい、UI から SDK を封じる意味が無くなる。
+target_include_directories(efs_core
+    PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    PRIVATE "${EFS_EVERYTHING_SDK_DIR}"
 )
 target_link_libraries(efs_core PUBLIC Qt6::Core)
 target_compile_definitions(efs_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
@@ -57,6 +60,10 @@ efs_copy_everything_dll(efs)
 # プログラム。Phase 1 で本物の backend が入った時点で削除する。
 qt_add_executable(efs_spike src/spike/everything_spike.cpp)
 target_link_libraries(efs_spike PRIVATE efs_core)
+# SDK の定数 (EVERYTHING_REQUEST_* 等) を直接使うため、この調査用ターゲットだけ
+# 明示的に SDK の include パスを持つ。定数を包み直す層は作らない (Phase 1 で
+# このターゲットごと消えるため)。
+target_include_directories(efs_spike PRIVATE "${EFS_EVERYTHING_SDK_DIR}")
 # コンソールアプリであることを明示する (既定値に依存しない)。
 set_target_properties(efs_spike PROPERTIES WIN32_EXECUTABLE FALSE)
 efs_copy_everything_dll(efs_spike)

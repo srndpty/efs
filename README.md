@@ -4,8 +4,7 @@ Everything を検索エンジンとして使う Windows 向けファイル検索
 アプリの UI 表示は英語。x64 のみ。
 
 現在の状態: **Phase 0 (walking skeleton) 完了**。
-計画の authority は
-`C:\Users\lambe\.claude\plans\windows-everything-file-swirling-canyon.md`。
+計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 この README には Phase 0 で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
 
