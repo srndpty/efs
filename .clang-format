@@ -1,0 +1,37 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+
+ColumnLimit: 100
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+NamespaceIndentation: None
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Qt 系の慣習に合わせ、関数定義のみ開き括弧を次行に置く。
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeCatch: false
+  BeforeElse: false
+  SplitEmptyFunction: false
+
+AllowShortFunctionsOnASingleLine: Inline
+AlwaysBreakTemplateDeclarations: Yes
+FixNamespaceComments: true
+
+# include の並べ替えは行うが、自作ヘッダ / Qt / Win32 / SDK のブロック分けは
+# 手で意味を持たせているため、ブロックの結合はしない。
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve

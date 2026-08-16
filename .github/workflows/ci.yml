@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# CI 上には Everything が存在しないため、IPC を伴うテストは QSKIP される。
+# ビルドが通ることと、Everything 非依存のロジックが壊れていないことを見る。
+env:
+  QT_VERSION: 6.8.3
+
+jobs:
+  format:
+    name: format (pre-commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pre-commit/action@v3.0.1
+
+  build-test:
+    name: build & test (${{ matrix.config }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: ''
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: >
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build
+        run: cmake --build build/ci
+
+      - name: Test
+        run: ctest --test-dir build/ci --output-on-failure
+
+  lint:
+    name: lint (clang-tidy)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # compile_commands.json を得るための設定のみ。ビルドは AUTOMOC が生成する
+      # ヘッダを揃えるために必要。
+      - name: Configure & build
+        run: |
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build build/ci
+
+      # VS 同梱の VC\Tools\Llvm\bin は 32bit 版で、Qt のヘッダを解析すると
+      # アクセス違反で落ちる。必ず x64 版を使うこと。
+      - name: clang-tidy
+        run: |
+          $candidates = @(
+            "$env:VCINSTALLDIR\Tools\Llvm\x64\bin\clang-tidy.exe",
+            "C:\Program Files\LLVM\bin\clang-tidy.exe"
+          )
+          $tidy = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $tidy) { $tidy = (Get-Command clang-tidy).Source }
+          Write-Host "using $tidy"
+          $files = Get-ChildItem -Recurse src -Include *.cpp | ForEach-Object { $_.FullName }
+          & $tidy -p build/ci --quiet $files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  coverage:
+    name: coverage (OpenCppCoverage)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install OpenCppCoverage
+        run: choco install opencppcoverage -y --no-progress
+
+      - name: Configure & build (Debug)
+        run: |
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          cmake --build build/ci
+
+      # 閾値は設けない。Everything 依存のテストが CI では QSKIP される以上、
+      # 数値の絶対量に意味が無いため。傾向を見るためだけに出力する。
+      - name: Run coverage
+        run: |
+          $env:PATH = "C:\Program Files\OpenCppCoverage;$env:PATH"
+          OpenCppCoverage.exe --sources "$PWD\src" `
+            --excluded_sources "$PWD\third_party" --excluded_sources "$PWD\tests" `
+            --export_type "cobertura:build\coverage.xml" `
+            --export_type "html:build\coverage-html" `
+            -- build\ci\tests\efs_tests.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            build/coverage.xml
+            build/coverage-html

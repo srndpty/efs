@@ -3,11 +3,23 @@
   "configurePresets": [
     {
       "name": "msvc2022-x64",
-      "displayName": "MSVC 2022 x64 (multi-config)",
+      "displayName": "MSVC 2022 x64 (Visual Studio, マルチ構成)",
+      "description": "通常の開発用。素の PowerShell から使える。",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/msvc2022-x64",
       "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64"
+      }
+    },
+    {
+      "name": "ninja-x64-debug",
+      "displayName": "Ninja x64 Debug (CI / clang-tidy)",
+      "description": "compile_commands.json を生成する。Developer PowerShell が必要。",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ninja-x64-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64"
       }
     }
@@ -22,6 +34,29 @@
       "name": "msvc2022-x64-release",
       "configurePreset": "msvc2022-x64",
       "configuration": "Release"
+    },
+    {
+      "name": "ninja-x64-debug",
+      "configurePreset": "ninja-x64-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "msvc2022-x64-debug",
+      "configurePreset": "msvc2022-x64",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "msvc2022-x64-release",
+      "configurePreset": "msvc2022-x64",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "ninja-x64-debug",
+      "configurePreset": "ninja-x64-debug",
+      "output": { "outputOnFailure": true }
     }
   ]
 }

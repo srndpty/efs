@@ -1,5 +1,5 @@
-// Phase 0 walking skeleton: prove that a Qt 6.8 QMainWindow builds and shows.
-// The real window is built in Phase 1.
+// Phase 0 の walking skeleton。Qt 6.8 の QMainWindow がビルドでき、実際に表示
+// されることだけを確認する。中身は Phase 1 で作る。
 #include <QApplication>
 #include <QMainWindow>
 

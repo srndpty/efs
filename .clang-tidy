@@ -1,0 +1,30 @@
+# 開発中の個人ツールなので、チェックは「実際にバグを防ぐもの」に絞る。
+# 網羅性を上げるより、警告ゼロを維持できることを優先する。
+#
+# 無効化した理由:
+#   bugprone-exception-escape  Qt は内部で確保を行うため main() は常に指摘される。
+#                              bad_alloc を main で扱っても意味が無い。
+#   readability-magic-numbers  クエリ上限などリテラルのままが読みやすい箇所が多い。
+#   modernize-use-trailing-return-type  既存コードの記法と衝突するだけ。
+---
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -modernize-use-trailing-return-type,
+  -readability-braces-around-statements,
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-implicit-bool-conversion,
+  -readability-static-accessed-through-instance
+
+# src 配下の自作ヘッダのみ診断する。Qt / Windows SDK / Everything SDK の
+# ヘッダは対象外。
+HeaderFilterRegex: '.*[/\\]src[/\\].*'
+FormatStyle: file
+WarningsAsErrors: '*'

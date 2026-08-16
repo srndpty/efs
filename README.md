@@ -1,94 +1,118 @@
 # efs
 
-A Windows desktop file-search UI built on the Everything search engine.
-UI language: English. x64 only.
+Everything を検索エンジンとして使う Windows 向けファイル検索 UI。
+アプリの UI 表示は英語。x64 のみ。
 
-Status: **Phase 0 (walking skeleton) complete.** See
-`C:\Users\lambe\.claude\plans\windows-everything-file-swirling-canyon.md` for the
-full plan; this README records only what Phase 0 established.
+現在の状態: **Phase 0 (walking skeleton) 完了**。
+計画の authority は
+`C:\Users\lambe\.claude\plans\windows-everything-file-swirling-canyon.md`。
+この README には Phase 0 で確定した事実だけを記録する。
+開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
 
-## Toolchain (exact versions used)
+## 使用したツールチェーン (実際のバージョン)
 
-| Component | Version |
+| 項目 | バージョン |
 |---|---|
-| Qt | **6.8.3** (LTS), `win64_msvc2022_64`, installed via `aqtinstall` 3.3.0 to `C:\Qt\6.8.3\msvc2022_64` |
-| Visual Studio | Community 2022, 17.14.36518.9 (MSVC 19.44.35217.0, toolset 14.44.35207) |
+| Qt | **6.8.3** (LTS)、`win64_msvc2022_64`、`aqtinstall` 3.3.0 で `C:\Qt\6.8.3\msvc2022_64` へ導入 |
+| Visual Studio | Community 2022 17.14.36518.9 (MSVC 19.44.35217.0、ツールセット 14.44.35207) |
 | Windows SDK | 10.0.26100.0 |
 | CMake | 4.0.3 |
 | Everything | 1.4.1.1022 (`C:\Program Files\Everything\Everything.exe`) |
-| Everything SDK | voidtools `Everything-SDK.zip`, header + `dll\Everything64.dll` vendored into `third_party/everything-sdk/` |
+| Everything SDK | voidtools の `Everything-SDK.zip`。ヘッダと `dll\Everything64.dll` を `third_party/everything-sdk/` へベンダリング |
+| clang-format / clang-tidy | 19.1.5 (VS 2022 同梱) |
+| pre-commit | 4.2.0 |
 
-Qt was installed with:
+Qt の導入手順:
 
 ```powershell
 python -m pip install aqtinstall
 python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O C:\Qt
 ```
 
-## Build and run
+## ビルドと実行
 
 ```powershell
 cmake --preset msvc2022-x64
-cmake --build --preset msvc2022-x64-debug      # or msvc2022-x64-release
+cmake --build --preset msvc2022-x64-debug      # または msvc2022-x64-release
+ctest --preset msvc2022-x64-debug
 
-$env:PATH = "C:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"   # until windeployqt (Phase 3)
+$env:PATH = "C:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"   # windeployqt 導入 (Phase 3) までの暫定
 .\build\msvc2022-x64\Debug\efs.exe
 .\build\msvc2022-x64\Debug\efs_spike.exe
 ```
 
-The Visual Studio generator is multi-config, so there is one configure preset
-(`msvc2022-x64`) and two build presets. `Everything64.dll` is copied next to each
-executable by a post-build step.
+Visual Studio ジェネレータはマルチ構成のため、configure プリセットは
+`msvc2022-x64` の 1 つで、build / test プリセットが Debug / Release に分かれる。
+`Everything64.dll` は post-build で各実行ファイルの隣へコピーされる。
 
-## Targets
+clang-tidy は `compile_commands.json` を要求するので、lint だけは Ninja
+プリセット (`ninja-x64-debug`) を使う。これは Developer PowerShell が必要。
 
-| Target | Purpose |
+## ターゲット
+
+| ターゲット | 用途 |
 |---|---|
-| `efs_core` | static lib; currently only `EverythingApi` (the DLL boundary). Grows into `core/` + `backend/` in Phase 1. |
-| `efs` | WIN32 GUI executable. Phase 0: an empty `QMainWindow`. |
-| `efs_spike` | **Phase 0 only.** Console probe for the Everything SDK and the `ext:`/`regex:` question. Delete when Phase 1 lands the real backend. |
+| `efs_core` | 静的ライブラリ。現状は `EverythingApi` (DLL 境界) のみ。Phase 1 で `core/` と `backend/` に育つ |
+| `efs` | WIN32 GUI 実行ファイル。Phase 0 では空の `QMainWindow` |
+| `efs_tests` | QtTest。`ctest` に登録済み |
+| `efs_spike` | **Phase 0 限定**。Everything SDK と `ext:` / `regex:` の調査用コンソールプログラム。Phase 1 で削除する |
 
-`ctest` is not wired up yet — there are no tests until Phase 1.
+## 開発ツール
 
-## Phase 0 findings
+| 目的 | 手段 |
+|---|---|
+| 整形 | `.clang-format` (LLVM ベース、100 桁、4 スペース、関数のみ開き括弧を次行) |
+| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定) |
+| テスト | QtTest + `ctest` |
+| カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
+| pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
+| CI | `.github/workflows/ci.yml` — format / build & test (Debug・Release) / lint / coverage |
 
-### `ext:` + `regex:` composability — PASS
+CI 上には Everything が存在しないため、IPC を伴うテストは `QSKIP` される。
+これは意図した挙動。カバレッジに閾値は設けていない。
 
-Plan section 6.2 flagged a risk: `Everything_SetRegex(TRUE)` makes the *whole*
-search string a regex, which would be incompatible with an `ext:` prefix. The
-spike confirms both halves of that concern on Everything 1.4.1.1022:
+## Phase 0 の検証結果
 
-- **The inline `regex:` modifier composes with `ext:`.** `ext:jpg regex:^a00`
-  returned 122 results, every one of which ends in `.jpg` **and** matches
-  `^a00`; the negative control `ext:jpg regex:^ZZQXNOMATCH` returned 0. The
-  terms are AND-ed.
-- **The global flag is the wrong lever.** `Everything_SetRegex(TRUE)` with
-  `ext:jpg ^IMG_\d+` returned 0 results — the `ext:` prefix is swallowed into
-  the pattern, exactly as suspected.
+### `ext:` と `regex:` の併用 — PASS
 
-**Decision: `EverythingQueryBuilder` keeps `Everything_SetRegex(FALSE)`
-permanently and emits `"<extPrefix> regex:<pattern>"`.** The fallback described
-in the plan (folding extensions into the regex) is *not* needed and must not be
-implemented.
+計画 6.2 が挙げていたリスクは「`Everything_SetRegex(TRUE)` は検索文字列**全体**を
+正規表現として解釈するため、`ext:` 前置詞と併用できないのではないか」というもの。
+Everything 1.4.1.1022 に対する実測で、その懸念の両面が確認された。
 
-### Other observations
+- **インライン修飾子 `regex:` は `ext:` と併用できる。**
+  `ext:jpg regex:^a00` は 122 件を返し、その全行が `.jpg` で終わり**かつ**
+  `^a00` に一致した。陰性対照 `ext:jpg regex:^ZZQXNOMATCH` は 0 件。
+  2 つの項は AND 結合されている。
+- **グローバルフラグは使えない。** `Everything_SetRegex(TRUE)` で
+  `ext:jpg ^IMG_\d+` を投げると 0 件。懸念どおり `ext:` 前置詞がパターンの
+  一部として飲み込まれている。
 
-- IPC reaches the running client: `Everything_GetMajorVersion` etc. report
-  `1.4.1.1022`.
-- Truncation behaves as the plan assumes: `ext:jpg` on this machine gives
-  `GetNumResults=5000` (the `SetMax` cap) against `GetTotResults=1288529`, so
-  `truncated = totalMatches > rows.size()` is a sound test.
-- Matching is case-insensitive with `SetMatchCase(FALSE)`: `regex:^IMG_\d+`
-  matched `img_0193`.
-- Missing-DLL diagnosis works: running the spike from a directory without
-  `Everything64.dll` reports the probed paths and win32 error 126 rather than
-  failing to start.
+**決定: `EverythingQueryBuilder` は `Everything_SetRegex(FALSE)` を維持したまま、
+`"<拡張子前置詞> regex:<パターン>"` を組み立てる。** 計画に代替案として
+書かれていた「拡張子を正規表現に畳み込むフォールバック」は不要であり、
+実装してはならない。
 
-## Decisions fixed for the MVP
+### その他の観測
 
-- App/exe name `efs`; UI in English.
-- `maxResults` = 5000; `matchPath` = false; `matchCase` = false.
-- File-kind extension lists are hard-coded in source.
-- Everything is **not** auto-started when it is not running; the UI explains why
-  the search failed.
-- Everything 1.5 is out of scope; no 1.4/1.5 abstraction is introduced.
+- IPC は起動中のクライアントに届いている: `Everything_GetMajorVersion` 等が
+  `1.4.1.1022` を返す。
+- 打ち切りの扱いは計画の前提どおり。この機で `ext:jpg` は
+  `GetNumResults=5000` (`SetMax` の上限) に対し `GetTotResults=1288529` を返す。
+  `truncated = totalMatches > rows.size()` で判定できる。
+- `SetMatchCase(FALSE)` で大文字小文字を無視する: `regex:^IMG_\d+` が
+  `img_0193` に一致した。
+- DLL 欠如時の診断が機能する: `Everything64.dll` の無いディレクトリから
+  実行すると、探索した場所と win32 エラー 126 を報告する (起動失敗にはならない)。
+
+### 未検証
+
+- `ERROR_IPC` の経路 (Everything 未起動時の診断出力) は実装済みだが未実行。
+  検証には起動中の `Everything.exe` を落とす必要があるため見送った。
+
+## MVP の確定事項
+
+- exe 名 `efs`、UI は英語。
+- `maxResults` = 5000、`matchPath` = false、`matchCase` = false。
+- 種別フィルタの拡張子リストはソースにハードコード。
+- Everything が未起動でも自動起動はしない。UI に理由を表示する。
+- Everything 1.5 は対象外。1.4 / 1.5 の抽象化は行わない。
