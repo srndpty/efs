@@ -6,6 +6,10 @@
 #                              bad_alloc を main で扱っても意味が無い。
 #   readability-magic-numbers  クエリ上限などリテラルのままが読みやすい箇所が多い。
 #   modernize-use-trailing-return-type  既存コードの記法と衝突するだけ。
+#   performance-enum-size      enum の基底型を uint8_t へ縮めろという指摘。
+#                              バグを防ぐ検査ではなく、Qt 側の enum が int 幅で
+#                              あることとも噛み合わない。ドメインの型を lint に
+#                              合わせて歪める価値が無い。
 ---
 Checks: >
   -*,
@@ -16,6 +20,7 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -modernize-use-trailing-return-type,
+  -performance-enum-size,
   -readability-braces-around-statements,
   -readability-function-cognitive-complexity,
   -readability-identifier-length,

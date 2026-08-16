@@ -1,7 +1,9 @@
-// Phase 0 の walking skeleton。Qt 6.8 の QMainWindow がビルドでき、実際に表示
-// されることだけを確認する。中身は Phase 1 で作る。
+#include "app/MainWindow.h"
+#include "backend/everything/EverythingBackend.h"
+
 #include <QApplication>
-#include <QMainWindow>
+
+#include <memory>
 
 int main(int argc, char** argv)
 {
@@ -9,9 +11,10 @@ int main(int argc, char** argv)
     QApplication::setApplicationName(QStringLiteral("efs"));
     QApplication::setOrganizationName(QStringLiteral("efs"));
 
-    QMainWindow window;
-    window.setWindowTitle(QStringLiteral("efs"));
-    window.resize(900, 600);
+    // backend の選択は 1 箇所だけ。BackendFactory は 2 つ目の実装が実際に
+    // 必要になる Phase 4 まで作らない。
+    efs::MainWindow window(std::make_unique<efs::EverythingBackend>());
+    window.resize(1000, 640);
     window.show();
 
     return QApplication::exec();

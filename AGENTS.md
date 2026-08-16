@@ -36,7 +36,7 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 | 境界 | 規則 |
 |---|---|
 | UI ↔ 検索バックエンド | UI コードは `Everything.h` を include しない。`ISearchBackend` 越しにのみ触る。 |
-| Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下と、SDK 自体を直接検証する `tests/`・`src/spike/` のみ。SDK の include パスは `efs_core` の **PRIVATE** に置き、リンクしただけでは伝播させない。 |
+| Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下と、SDK 自体を直接検証する `tests/` のみ。SDK の include パスは `efs_core` の **PRIVATE** に置き、リンクしただけでは伝播させない。 |
 | スレッド | Everything SDK の呼び出しは検索スレッド 1 本に直列化する。SDK はグローバル状態を持つのでスレッドプール化は禁止。 |
 | 純粋関数 | クエリ組み立て・書式整形は Qt 以外に依存しない自由関数にし、単体テストの主戦場にする。 |
 
@@ -67,8 +67,7 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 ```
 src/core/                 Qt Core のみに依存。Widgets / Win32 / Everything 非依存
 src/backend/everything/   Everything SDK の唯一の利用箇所
-src/app/                  Qt Widgets の UI
-src/spike/                Phase 0 限定の調査用。Phase 1 で削除する
+src/app/                  UI と検索の駆動。Widgets に依存するのは MainWindow と main() だけ
 tests/                    QtTest。ctest に登録
 docs/                     implementation-plan.md (計画の authority)
 scripts/                  補助スクリプト
@@ -143,12 +142,12 @@ pwsh scripts/coverage.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 0 (walking skeleton) 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 1 (MVP コア) 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
 | 0 | Qt 導入、Everything SDK の動的ロード、`ext:` + `regex:` の実機検証 (完了) |
-| 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) |
+| 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) (完了) |
 | 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 |
 | 3 | 設定永続化、エラー表示、アイコン、`windeployqt` |
 | 4 | 将来 backend の受け皿 (着手は任意) |
