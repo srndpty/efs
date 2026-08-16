@@ -36,7 +36,7 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 | 境界 | 規則 |
 |---|---|
 | UI ↔ 検索バックエンド | UI コードは `Everything.h` を include しない。`ISearchBackend` 越しにのみ触る。 |
-| Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下と、SDK 自体を直接検証する `tests/`・`src/spike/` のみ。SDK の include パスは `efs_core` の **PRIVATE** に置き、リンクしただけでは伝播させない。 |
+| Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下と、SDK 自体を直接検証する `tests/` のみ。SDK の include パスは `efs_core` の **PRIVATE** に置き、リンクしただけでは伝播させない。 |
 | スレッド | Everything SDK の呼び出しは検索スレッド 1 本に直列化する。SDK はグローバル状態を持つのでスレッドプール化は禁止。 |
 | 純粋関数 | クエリ組み立て・書式整形は Qt 以外に依存しない自由関数にし、単体テストの主戦場にする。 |
 
@@ -67,8 +67,7 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 ```
 src/core/                 Qt Core のみに依存。Widgets / Win32 / Everything 非依存
 src/backend/everything/   Everything SDK の唯一の利用箇所
-src/app/                  Qt Widgets の UI
-src/spike/                Phase 0 限定の調査用。Phase 1 で削除する
+src/app/                  UI と検索の駆動。Widgets に依存するのは MainWindow と main() だけ
 tests/                    QtTest。ctest に登録
 docs/                     implementation-plan.md (計画の authority)
 scripts/                  補助スクリプト
@@ -96,8 +95,7 @@ pre-commit run --all-files
 # lint (Developer PowerShell が必要。compile_commands.json を使う)
 cmake --preset ninja-x64-debug
 cmake --build --preset ninja-x64-debug
-$tidy = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-tidy.exe"
-& $tidy -p build/ninja-x64-debug --quiet (Get-ChildItem -Recurse src -Include *.cpp).FullName
+pwsh scripts/lint.ps1
 
 # カバレッジ (要 OpenCppCoverage)
 pwsh scripts/coverage.ps1
@@ -110,7 +108,21 @@ pwsh scripts/coverage.ps1
 
 - **clang-tidy は x64 版を使う。** VS 同梱の `VC\Tools\Llvm\bin` は 32bit 版で、
   Qt のヘッダを解析するとアクセス違反 (0xC0000005) で落ちる。
-  `VC\Tools\Llvm\x64\bin` を使うこと。
+  `VC\Tools\Llvm\x64\bin` を使うこと (`scripts/lint.ps1` がそうしている)。
+- **ローカルと CI で clang-tidy のバージョンが違う。** ローカルは VS 2022 同梱の
+  19.1.5、CI ランナーはより新しい VS 同梱版。新しい方でだけ有効な check があり、
+  **ローカルが緑でも CI が落ちることがある**。実例: `modernize-use-integer-sign-comparison`
+  は clang-tidy 20 で追加されたため 19.1.5 では検出されず、CI だけが失敗した。
+  `WarningsAsErrors: '*'` なので新しい check は即エラーになる。CI が lint で
+  落ちたら `pwsh scripts/lint.ps1 -ClangTidy <新しい clang-tidy のパス>` で手元に
+  再現させる。スクリプトはバージョンを表示するので CI ログと突き合わせられる。
+  新しい版が手元に無ければ venv に入れるのが手軽 (システムを汚さない):
+
+  ```powershell
+  python -m venv .tidy20
+  .tidy20\Scripts\pip install clang-tidy==20.1.0
+  pwsh scripts/lint.ps1 -ClangTidy .tidy20\Scripts\clang-tidy.exe
+  ```
 - **QtTest はリダイレクトされると標準出力に何も書かない。** Windows では
   コンソールが無いと判断すると `OutputDebugString` へ送るため、ctest から
   実行すると結果が見えない。`tests/CMakeLists.txt` で
@@ -143,12 +155,12 @@ pwsh scripts/coverage.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 0 (walking skeleton) 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 1 (MVP コア) 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
 | 0 | Qt 導入、Everything SDK の動的ロード、`ext:` + `regex:` の実機検証 (完了) |
-| 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) |
+| 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) (完了) |
 | 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 |
 | 3 | 設定永続化、エラー表示、アイコン、`windeployqt` |
 | 4 | 将来 backend の受け皿 (着手は任意) |

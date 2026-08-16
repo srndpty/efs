@@ -3,9 +3,10 @@
 Everything を検索エンジンとして使う Windows 向けファイル検索 UI。
 アプリの UI 表示は英語。x64 のみ。
 
-現在の状態: **Phase 0 (walking skeleton) 完了**。
+現在の状態: **Phase 1 (MVP コア) 完了** — 検索欄に入力すると Everything の結果が
+テーブルに出る。種別フィルタ / Regex トグル / テーマ / ソート UI は Phase 2。
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-この README には Phase 0 で確定した事実だけを記録する。
+この README には実測で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
 
 ## 使用したツールチェーン (実際のバージョン)
@@ -37,7 +38,6 @@ ctest --preset msvc2022-x64-debug
 
 $env:PATH = "C:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"   # windeployqt 導入 (Phase 3) までの暫定
 .\build\msvc2022-x64\Debug\efs.exe
-.\build\msvc2022-x64\Debug\efs_spike.exe
 ```
 
 Visual Studio ジェネレータはマルチ構成のため、configure プリセットは
@@ -51,17 +51,20 @@ clang-tidy は `compile_commands.json` を要求するので、lint だけは Ni
 
 | ターゲット | 用途 |
 |---|---|
-| `efs_core` | 静的ライブラリ。現状は `EverythingApi` (DLL 境界) のみ。Phase 1 で `core/` と `backend/` に育つ |
-| `efs` | WIN32 GUI 実行ファイル。Phase 0 では空の `QMainWindow` |
-| `efs_tests` | QtTest。`ctest` に登録済み |
-| `efs_spike` | **Phase 0 限定**。Everything SDK と `ext:` / `regex:` の調査用コンソールプログラム。Phase 1 で削除する |
+| `efs_core` | 静的ライブラリ。Qt Widgets に依存しないものすべて (core / backend / 検索スレッド / テーブルモデル) |
+| `efs` | WIN32 GUI 実行ファイル。`MainWindow` と `main()` だけを持つ |
+| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_result_model` / `test_search_controller` / `test_everything_api` / `test_everything_backend`) |
+
+QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けないため、テストは
+ファイル単位でターゲットを分けている。共通設定は `tests/CMakeLists.txt` の
+`efs_add_test()` に寄せてある。
 
 ## 開発ツール
 
 | 目的 | 手段 |
 |---|---|
 | 整形 | `.clang-format` (LLVM ベース、100 桁、4 スペース、関数のみ開き括弧を次行) |
-| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定) |
+| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定)。実行は `pwsh scripts/lint.ps1` — CI も同じスクリプトを呼ぶ |
 | テスト | QtTest + `ctest` |
 | カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
 | pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
@@ -105,8 +108,20 @@ Everything 1.4.1.1022 に対する実測で、その懸念の両面が確認さ�
 
 ### 未検証
 
-- `ERROR_IPC` の経路 (Everything 未起動時の診断出力) は実装済みだが未実行。
-  検証には起動中の `Everything.exe` を落とす必要があるため見送った。
+- `ERROR_IPC` の経路 (Everything 未起動時の「Everything is not running.」表示) は
+  実装済みだが未実行。検証には起動中の `Everything.exe` を落とす必要があるため
+  見送った。
+
+## Phase 1 の実測
+
+- 通常の検索 (`everything`、172 件) は 110〜120 ms 前後。
+- 全ドライブ規模の検索 (`e`、3,989,130 件) は 469 ms で、
+  ステータスバーに `3,989,130 results (showing first 5,000) / 469 ms` と出る。
+  打ち切りは仕様どおり 5,000 行。
+- 高速入力中も UI は固まらない (デバウンス 120 ms + 検索スレッド)。
+  ただし **重いクエリの実行中にウィンドウを閉じると、そのクエリが終わるまで
+  終了が待たされる**。Everything の IPC クエリは中断できないため意図した挙動
+  (計画 4)。実測では 1 秒未満。
 
 ## MVP の確定事項
 

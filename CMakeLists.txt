@@ -35,10 +35,29 @@ function(efs_copy_everything_dll target)
 endfunction()
 
 # --- efs_core -----------------------------------------------------------------
-# Everything SDK との境界。Phase 1 以降で core/ と backend/ に育つ。
+# Qt Widgets に依存しないものはすべてここに入れる。テスト (efs_tests) が
+# リンクできる必要があるため、src/app 配下でも Widgets 非依存のクラス
+# (SearchController / SearchWorker / ResultTableModel) はこちらに置く。
+# efs 実行ファイル側に残すのは MainWindow と main() だけ。
 add_library(efs_core STATIC
+    src/core/SearchTypes.h
+    src/core/ISearchBackend.h
+    src/core/FileKinds.h
+    src/core/FileKinds.cpp
+    src/core/Formatting.h
+    src/core/Formatting.cpp
     src/backend/everything/EverythingApi.h
     src/backend/everything/EverythingApi.cpp
+    src/backend/everything/EverythingQueryBuilder.h
+    src/backend/everything/EverythingQueryBuilder.cpp
+    src/backend/everything/EverythingBackend.h
+    src/backend/everything/EverythingBackend.cpp
+    src/app/SearchWorker.h
+    src/app/SearchWorker.cpp
+    src/app/SearchController.h
+    src/app/SearchController.cpp
+    src/app/ResultTableModel.h
+    src/app/ResultTableModel.cpp
 )
 # src は PUBLIC (利用側が EverythingApi.h を include する)。
 # Everything SDK は PRIVATE。これを PUBLIC にすると efs_core にリンクするだけで
@@ -51,25 +70,16 @@ target_link_libraries(efs_core PUBLIC Qt6::Core)
 target_compile_definitions(efs_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
 # --- efs (GUI) ----------------------------------------------------------------
-qt_add_executable(efs WIN32 src/app/main.cpp)
-target_link_libraries(efs PRIVATE Qt6::Widgets)
+qt_add_executable(efs WIN32
+    src/app/main.cpp
+    src/app/MainWindow.h
+    src/app/MainWindow.cpp
+)
+target_link_libraries(efs PRIVATE efs_core Qt6::Widgets)
 efs_copy_everything_dll(efs)
 
-# --- efs_spike (コンソール / Phase 0 限定) --------------------------------------
-# Everything SDK と ext: / regex: 併用 (計画 6.2) を実機確認するための調査用
-# プログラム。Phase 1 で本物の backend が入った時点で削除する。
-qt_add_executable(efs_spike src/spike/everything_spike.cpp)
-target_link_libraries(efs_spike PRIVATE efs_core)
-# SDK の定数 (EVERYTHING_REQUEST_* 等) を直接使うため、この調査用ターゲットだけ
-# 明示的に SDK の include パスを持つ。定数を包み直す層は作らない (Phase 1 で
-# このターゲットごと消えるため)。
-target_include_directories(efs_spike PRIVATE "${EFS_EVERYTHING_SDK_DIR}")
-# コンソールアプリであることを明示する (既定値に依存しない)。
-set_target_properties(efs_spike PROPERTIES WIN32_EXECUTABLE FALSE)
-efs_copy_everything_dll(efs_spike)
-
 if(MSVC)
-    foreach(t efs_core efs efs_spike)
+    foreach(t efs_core efs)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
     endforeach()
 endif()

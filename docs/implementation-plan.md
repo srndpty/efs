@@ -252,7 +252,14 @@ buildQueryString(q) =
 | Document | `ext:pdf;doc;docx;xls;xlsx;ppt;pptx;txt;md;rtf;odt;ods;csv;epub` |
 | Directory | `folder:` |
 
-**Regex の扱い（要検証・Phase 0 で確定）**: グローバル API の `Everything_SetRegex(TRUE)` は検索文字列**全体**を正規表現として解釈するため、`ext:` 前置詞と併用できない可能性がある。したがって既定方針は **インライン修飾子 `regex:` を使い、`Everything_SetRegex` は常に FALSE のままにする** (`ext:jpg;png regex:^IMG_\d+`)。Phase 0 の walking skeleton でこの併用が実際に動くことを実機確認し、もし動かなければ「Regex ON のときは種別フィルタを拡張子の正規表現 `.*\.(jpg|png)$` としてパターンに畳み込む」フォールバックへ切り替える (この切替が `EverythingQueryBuilder` 内で完結することが、この分離の狙い)。
+**Regex の扱い（Phase 0 で実機確定・再検討不要）**: Everything 1.4.1.1022 に対する実測で以下が確定した。
+
+- **インライン修飾子 `regex:` は `ext:` と併用できる。** 2 つの項は AND 結合される (`ext:jpg regex:^a00` は全行が `.jpg` かつ `^a00` に一致。陰性対照は 0 件)。
+- **グローバルフラグ `Everything_SetRegex(TRUE)` は使えない。** 検索文字列**全体**を正規表現として解釈するため `ext:` 前置詞がパターンに飲み込まれ、`ext:jpg ^IMG_\d+` は 0 件になる。
+
+**確定方針: `Everything_SetRegex` は常に FALSE のままにし、正規表現は `regex:` 項としてクエリ文字列へ埋め込む** (`ext:jpg;png regex:^IMG_\d+`)。
+
+代替案として書かれていた「Regex ON のときは種別フィルタを拡張子の正規表現 `.*\.(jpg|png)$` へ畳み込むフォールバック」は **不要であり、実装してはならない**。この結論は `tests/test_query_builder.cpp` の `p0RegressionExtPlusRegex` と `tests/test_everything_backend.cpp` の `extAndRegexAreCombinedWithAnd` (陽性 + 陰性対照) で回帰テストとして固定してある。
 
 ### 6.3 `EverythingBackend::search()` — 1クエリの手順
 
@@ -383,7 +390,8 @@ struct Settings {
 | 層 | 手段 | 内容 |
 |---|---|---|
 | `EverythingQueryBuilder` | QtTest 単体 (**最重要**) | 各 `FileKind` の前置詞、Regex ON/OFF、空文字入力、`Directory` + テキスト併用、特殊文字を含む入力。ここが仕様の中心。 |
-| `Formatting` | QtTest 単体 | サイズ整形 (0 / 1023 / 1MiB / 巨大値 / ディレクトリの -1)、無効 `QDateTime` → `"-"`、FILETIME→QDateTime 変換 (境界値・エポック)。 |
+| `Formatting` | QtTest 単体 | サイズ整形 (0 / 1023 / 1MiB / 巨大値 / ディレクトリの -1)、無効 `QDateTime` → `"-"`、ステータスバー文字列 (通常 / 打ち切り / エラー)。 |
+| `fileTimeToDateTime` | QtTest 単体 | FILETIME→QDateTime 変換 (境界値・エポック)。`core/` は Win32 非依存にするため、この関数だけは `backend/everything/` に置く。 |
 | `ResultTableModel` | QtTest + `QAbstractItemModelTester` | 行数/列数、各ロール、空結果、リセット時のシグナル整合性。 |
 | `EverythingBackend` | 統合テスト (条件付き) | 冒頭で `isAvailable()` を見て false なら `QSKIP`。`*.exe` 検索が1件以上返る、`Directory` フィルタで全行 `isDir==true`、`maxResults=10` で `rows.size()<=10 && totalMatches>=10`。 |
 | スレッド/stale 破棄 | QtTest + フェイク backend | `ISearchBackend` を実装した `SleepingFakeBackend` (指定ms待って固定結果を返す) を注入し、リクエストを連射 → 最後の id の結果だけが UI に届くことを検証。**backend を抽象化した副次的な利益がここに出る。** |
@@ -400,10 +408,12 @@ struct Settings {
 2. voidtools から Everything SDK を取得し `third_party/everything-sdk/` へ配置。
 3. `CMakeLists.txt` + `CMakePresets.json` (Qt パスをプリセットで指定)、空の `QMainWindow` がビルド・起動する。
 4. `EverythingApi` で DLL 動的ロード → **ハードコードしたクエリ** (`ext:jpg regex:^IMG_\d+` を含む) を1回実行し `qDebug()` に出力。
-   - **ここで 6.2 の「`ext:` + `regex:` 併用」を実機確認する。** 動かなければフォールバック方針に切替。
+   - **ここで 6.2 の「`ext:` + `regex:` 併用」を実機確認する。**
    - post-build で `Everything64.dll` を出力ディレクトリへコピー。
 
 **Phase 0 完了の定義: 「Qt のウィンドウが出る」かつ「Everything から結果が取れる」ことが別々に確認できている。** 技術リスクはこの2点に集中しているので、UI を作り込む前に潰す。
+
+**Phase 0 結果 (完了・受け入れ済み)**: 両方とも確認できた。`ext:` + `regex:` 併用は動作し、6.2 の確定方針どおりに実装してよい。調査用の `src/spike/everything_spike.cpp` は目的を達成したため Phase 1 で削除した。そこで確認した仕様は 6.2 に記載の回帰テストへ移してある。
 
 ### Phase 1 — 検索が動く (MVP コア)
 `SearchTypes.h` / `ISearchBackend` / `FileKinds` / `EverythingQueryBuilder` / `EverythingBackend` / `SearchWorker` + `QThread` / `SearchController` (デバウンス + id) / `ResultTableModel` / 検索ボックス + テーブル + ステータスバーの `MainWindow`。
@@ -411,6 +421,23 @@ struct Settings {
 
 ### Phase 2 — 不満点の解消 (MVP UX / このアプリを作る理由そのもの)
 種別フィルタツールバー (F3) / Regex トグル (F2) / ダークテーマ既定 (F7) / ヘッダソート = backend 再検索 (F5) / 打ち切り件数表示 (F6) / 右クリックメニュー + ダブルクリック/Enter で開く (F8)。
+
+**Phase 1 から持ち越した注意事項 (着手前に必ず読むこと)**
+
+1. **Regex ON で空白を含むパターン。** 現在の `EverythingQueryBuilder` は
+   `regex:` + ユーザー入力そのままを 1 つの項として出す。Everything の
+   search-term parser は空白を AND 区切りとして扱うため、`^IMG \d+` のような
+   パターンが 2 項に割れる可能性がある。**Phase 2 の冒頭で、Everything 1.4.1 に
+   対して陽性・陰性の対照を付けた実機検証を行い、quoting/escaping の要否を
+   確定してから仕様を決める。** Phase 1 では憶測でエスケープやフォールバックを
+   実装していない (実測してから対処する方針どおり)。
+
+2. **空テキスト + `FileKind != All`。** Phase 1 の `SearchController` は
+   「テキストが空 → 検索せず `cleared()`」と判定している。これはテキストしか
+   入力手段が無い Phase 1 でのみ正しい。Phase 2 で種別フィルタを入れると
+   「テキスト空・Image のみ」というフィルタ単独クエリを実行する必要があるため、
+   **この判定をそのまま流用してはならない。** 判定は「テキストが空」ではなく
+   「クエリ文字列全体が空 (= `buildQueryString()` が空)」へ移すのが素直。
 
 **Phase 2 完了 = MVP 完成。ここから Everything の代わりに日常使いを開始する。**
 
@@ -462,5 +489,5 @@ MVP (Phase 2 終了時) の受け入れ確認:
 6. **既定の照合設定**: `matchPath=false` (ファイル名のみ照合)、`matchCase=false` でよいか。Everything の現在の使い方と揃えたい。
 7. **種別フィルタの拡張子リスト**をソースにハードコードするか、INI で編集可能にするか (MVP はハードコードを推奨。編集は Phase 3 以降)。
 8. **Everything 1.5 系へ将来移行する予定はあるか** (1.5 は別 SDK。予定があるなら `EverythingApi` を 1.4/1.5 両対応の形で切っておく余地を残す)。
-9. **`ext:` と `regex:` の併用**が Everything 1.4.1 で動作しない場合、Regex ON 時は「種別フィルタを無効化 (グレーアウト)」と「拡張子を正規表現に畳み込む」のどちらを採るか。(Phase 0 の実測で不要になる可能性あり)
+9. ~~**`ext:` と `regex:` の併用**が Everything 1.4.1 で動作しない場合、Regex ON 時は「種別フィルタを無効化 (グレーアウト)」と「拡張子を正規表現に畳み込む」のどちらを採るか。~~ → **解決済み。併用は動作するので、この問い自体が不要になった (6.2 参照)。**
 10. Everything の設定で **サイズ/日時の fast sort が有効になっているか** — 無効だとソート時のクエリが目に見えて遅くなる可能性がある。Phase 2 で実測して判断でよいか。

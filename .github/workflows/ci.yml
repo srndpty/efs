@@ -80,20 +80,11 @@ jobs:
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           cmake --build build/ci
 
-      # VS 同梱の VC\Tools\Llvm\bin は 32bit 版で、Qt のヘッダを解析すると
-      # アクセス違反で落ちる。必ず x64 版を使うこと。
+      # 起動条件はスクリプト側に一本化する。ここに同じコマンドを書くと必ず
+      # 片方だけ古くなる (coverage と同じ理由)。ランナーの clang-tidy は
+      # ローカルより新しいことがあるので、スクリプトがバージョンを表示する。
       - name: clang-tidy
-        run: |
-          $candidates = @(
-            "$env:VCINSTALLDIR\Tools\Llvm\x64\bin\clang-tidy.exe",
-            "C:\Program Files\LLVM\bin\clang-tidy.exe"
-          )
-          $tidy = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $tidy) { $tidy = (Get-Command clang-tidy).Source }
-          Write-Host "using $tidy"
-          $files = Get-ChildItem -Recurse src -Include *.cpp | ForEach-Object { $_.FullName }
-          & $tidy -p build/ci --quiet $files
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: pwsh scripts/lint.ps1 -BuildDir build/ci
 
   coverage:
     name: coverage (OpenCppCoverage)
