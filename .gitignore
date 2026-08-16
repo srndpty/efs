@@ -26,3 +26,5 @@ Thumbs.db
 Desktop.ini
 *.swp
 *~
+
+tmp/
