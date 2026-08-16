@@ -49,6 +49,8 @@ private:
     void buildRowActions();
     void buildSearchShortcuts();
 
+    // クエリを発行した時点で表示を現在の query に合わせる (古い結果を残さない)。
+    void onSearchStarted();
     void onResultsReady(const efs::SearchResults& results);
     void onCleared();
     void onHeaderClicked(int column);

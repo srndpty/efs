@@ -13,15 +13,42 @@ namespace {
 
 // SHGetFileInfoW は shell の COM オブジェクトを内部で使う。アイコン worker の
 // スレッドでも呼ぶので、そのスレッドで一度だけ COM を初期化する。
-// thread_local なので「1 回だけ」がスレッドごとに成立する。
+//
+// 成功した CoInitializeEx は必ず同数の CoUninitialize と対にする必要がある
+// (S_FALSE = 既に同じモードで初期化済み、も「1 回数えた」ので対にする)。
+// thread_local な RAII にしておくと、そのスレッドの終了時にちょうど 1 回呼ばれる。
+// 汎用の COM フレームワークは作らない — 必要なのはこれだけ。
+class ComScope {
+public:
+    ComScope()
+    {
+        const HRESULT hr =
+            ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        // RPC_E_CHANGED_MODE 等の失敗では **CoUninitialize を呼んではならない**
+        // (他所が張った初期化を 1 つ剥がしてしまう)。その場合も続行はする —
+        // 既に別のモデルで初期化済みなら SHGetFileInfoW は動く。
+        m_owned = SUCCEEDED(hr);
+    }
+    ~ComScope()
+    {
+        if (m_owned)
+            ::CoUninitialize();
+    }
+
+    ComScope(const ComScope&) = delete;
+    ComScope& operator=(const ComScope&) = delete;
+    ComScope(ComScope&&) = delete;
+    ComScope& operator=(ComScope&&) = delete;
+
+private:
+    bool m_owned = false;
+};
+
 void ensureComInitialized()
 {
-    static thread_local bool initialized = false;
-    if (initialized)
-        return;
-    initialized = true;
-    // 失敗しても続行する (別のモデルで初期化済みなら SHGetFileInfoW は動く)。
-    ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    // 初回呼び出しでスレッドごとに構築され、スレッド終了時に破棄される。
+    static thread_local ComScope scope;
+    Q_UNUSED(scope)
 }
 
 } // namespace

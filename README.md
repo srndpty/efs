@@ -132,6 +132,7 @@ stylesheet は切り替えのたびに丸ごと差し替えるので累積しな
 
 | 状態 | ステータスバー |
 |---|---|
+| 検索中 | `Searching…` (結果テーブルは空) |
 | 正常 | `265 results / 254 ms` — 一致 0 件でも `0 results / 4 ms` |
 | 失敗 | `Search failed: Everything is not running.` |
 
@@ -140,6 +141,23 @@ stylesheet は切り替えのたびに丸ごと差し替えるので累積しな
 正常に完了した次の検索で解除される。失敗したときは結果テーブルを空にする
 — 前回の行が残っていると「成功した結果」に見えてしまうため。
 DLL のパス等の内部診断は `qWarning` へ流し、UI には出さない。
+
+### 検索中の表示 (in-flight search)
+
+`SearchController` は実際に backend へクエリを発行した時点で `searchStarted` を
+**同期に**発火する。UI はこれを受けて結果テーブルを空にし、前回の backend error を
+下ろし、ステータスバーを `Searching…` にする (Regex の構文警告は検索の進行とは
+無関係なので維持する)。絞り込み条件が無いときはクエリを出さないので、
+`searchStarted` ではなく既存の `cleared` 経路で `Ready` に戻る。
+
+理由: Everything の IPC クエリは中断できず、条件によっては 20 秒以上かかる
+(下の実測)。これが無いと**検索欄はもう別の条件なのに前の結果が表示され、しかも
+ダブルクリックで開けてしまう**。cancel / timeout / fallback は追加せず、
+「表示中の結果と現在の query の食い違い」だけを fail-closed にしてある。
+
+この signal は接続順に依存する。`MainWindow` は controller の signal を繋いで
+ステータスバーを初期化した**後で** `restoreOptions()` を呼ぶ — 逆にすると
+復元時の初回 filter-only クエリだけ `Searching…` を取りこぼす。
 
 ### Regex の構文警告
 
@@ -169,7 +187,14 @@ Name 列に Windows のファイル種別アイコンを出す。
   コピーしたのち必ず `DestroyIcon` する。
 - 完了通知 (`IconCache::imagesReady`) は**行番号を持たない**。受け手は viewport を
   塗り直すだけなので、通知が届いた時点でモデルが reset 済みでも行が消えていても
-  不整合が起きない。
+  不整合が起きない。cache を捨てる必要も無い — 未解決キーの placeholder は
+  delegate 側の `QPixmap` cache に**入れていない**ので、次の paint で自然に本物へ
+  差し替わる。別のキーのアイコンが 1 つ届くたびに解決済みの `QImage`→`QPixmap`
+  変換をやり直すことはしない。
+- `SHGetFileInfoW` は shell の COM を使うので、worker スレッドでは
+  `thread_local` な RAII (`ComScope`) で 1 回だけ `CoInitializeEx` し、
+  **成功したときだけ**スレッド終了時に `CoUninitialize` する
+  (`RPC_E_CHANGED_MODE` 等の失敗で呼ぶと他所の初期化を剥がしてしまう)。
 - この方針の代償として `.exe` などの「ファイル固有アイコン」は再現されず、
   汎用の種別アイコンになる。Phase 3 では高速・安定であることを優先した。
   アイコンは shell の小アイコン (16px) なので、高 DPI では拡大される。
@@ -461,10 +486,20 @@ Everything 側は `regex:"<パターン>"` (= 製品と同じ経路) で実行�
 
 この間も **UI はブロックしない** (`Responding=True` を確認済み) が、
 Everything の IPC クエリは中断できない契約なので、実行中のクエリが終わるまで
-新しい検索は始まらず、画面には**直前に成功した結果が残り続ける**。
-入力を高速に切り替えた直後は表示が数十秒古いままになりうる。
-これは Everything 側の性質であり、**Phase 3 では対処しない** (実測値の提示に
-とどめる。フォールバックや打ち切りは追加していない)。
+新しい検索は始まらない。
+
+**当初はこの間、直前に成功した結果がそのまま表示・操作できてしまっていた**
+(検索欄はもう別の条件なのに、古い行をダブルクリックで開けた)。P3 review で
+`searchStarted` を入れ、クエリ発行の時点で結果を空にして `Searching…` を出すよう
+にした。実測 (配布版・Qt を含まない `PATH`):
+
+| 時点 | 表示 |
+|---|---|
+| `a12` 入力直後 (1.2 秒後) | 行は空、`Searching…`、`Responding=True` |
+| 完了後 | `3,653 results / 7,668 ms`、全行が `a12` を含む (= 最新 query の結果だけ) |
+
+cancel / timeout / fallback は**追加していない**。Everything 側の走査時間そのものは
+変わらない (実測 7.7〜24.5 秒。ばらつきはキャッシュ状態による)。
 
 ### 配布ディレクトリの実測
 

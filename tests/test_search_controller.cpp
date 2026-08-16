@@ -109,6 +109,12 @@ private slots:
     void stateChangeInvalidatesRunningSearch_data();
     void stateChangeInvalidatesRunningSearch();
 
+    // --- P3 review: in-flight search の表示 authority --------------------------
+    void dispatchEmitsSearchStartedOnce();
+    void noConstraintEmitsClearedNotSearchStarted();
+    void searchStartedAccompaniesEveryQuery();
+    void searchStartedPrecedesResultsOfRunningSearch();
+
     // --- Phase 3: 設定復元 ----------------------------------------------------
     void restoredDefaultOptionsIssueNoQuery();
     void restoredFileKindIssuesAtMostOneQuery_data();
@@ -581,6 +587,128 @@ void TestSearchController::stateChangeInvalidatesRunningSearch()
     QVERIFY(queries.at(1).id > queries.at(0).id);
 }
 
+// --- P3 review: in-flight search の表示 authority ------------------------------
+//
+// Everything の IPC クエリは中断できず、条件によっては 20 秒以上かかる。
+// その間「検索欄は新しい query なのに古い結果が表示・操作できる」状態になるのを
+// 防ぐため、クエリを発行した時点で UI へ通知する。cancel / timeout / fallback は
+// 追加しない — 表示だけを fail-closed にする。
+
+// 絞り込み条件があって実際にクエリを出したときだけ、ちょうど 1 回発火する。
+void TestSearchController::dispatchEmitsSearchStartedOnce()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+
+    constexpr int kNeverFiresMs = 600000;
+    efs::SearchController controller(std::move(backend), kNeverFiresMs);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
+    QSignalSpy clearedSpy(&controller, &efs::SearchController::cleared);
+
+    controller.setText(QStringLiteral("abc"));
+    controller.searchNow();
+
+    // **同期で発火する**こと。backend の完了を待たずに UI が古い結果を捨てられる
+    // 必要があるため (backend は gate で止めたまま検証する)。
+    QCOMPARE(startedSpy.count(), 1);
+    QCOMPARE(clearedSpy.count(), 0);
+    QVERIFY(fake->waitStarted());
+    fake->release();
+}
+
+// 条件が無いときはクエリを出さないので searchStarted も出ない (既存の cleared 経路)。
+void TestSearchController::noConstraintEmitsClearedNotSearchStarted()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
+    QSignalSpy clearedSpy(&controller, &efs::SearchController::cleared);
+
+    // 空 / 空白のみ (Regex OFF) はどちらも「条件なし」。
+    controller.setText(QStringLiteral("abc"));
+    QTRY_COMPARE(startedSpy.count(), 1);
+    controller.setText(QString());
+    controller.setText(QStringLiteral("   "));
+
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(startedSpy.count(), 1); // 増えていない
+    QCOMPARE(clearedSpy.count(), 2);
+    QCOMPARE(fake->queries().size(), 1);
+}
+
+// 経路 (テキスト / 種別 / Regex / ソート) に依らず、発行したクエリ 1 本につき
+// searchStarted 1 回。数がずれると UI の表示クリアが漏れる。
+void TestSearchController::searchStartedAccompaniesEveryQuery()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
+
+    // 1 本ずつ完了させてから次へ (連続で変えると途中の要求が worker 側で
+    // stale 破棄され、本数で判定できなくなるため)。
+    controller.setText(QStringLiteral("a"));
+    QTRY_COMPARE(fake->queries().size(), 1);
+    controller.setKind(efs::FileKind::Image);
+    QTRY_COMPARE(fake->queries().size(), 2);
+    controller.setRegex(true);
+    QTRY_COMPARE(fake->queries().size(), 3);
+    controller.setSort(efs::SortKey::Size, efs::SortOrder::Desc);
+    QTRY_COMPARE(fake->queries().size(), 4);
+
+    QCOMPARE(startedSpy.count(), 4);
+
+    // 同値の再設定ではクエリも searchStarted も出ない。
+    controller.setKind(efs::FileKind::Image);
+    controller.setRegex(true);
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(startedSpy.count(), 4);
+    QCOMPARE(fake->queries().size(), 4);
+}
+
+// 実行中の検索がある状態で状態を変えると、新しい searchStarted が先に飛び、
+// 古い結果は既存どおり採用されない (stale 破棄の契約は変えていない)。
+void TestSearchController::searchStartedPrecedesResultsOfRunningSearch()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+
+    efs::SearchController controller(std::move(backend));
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
+    QSignalSpy resultsSpy(&controller, &efs::SearchController::resultsReady);
+
+    controller.setText(QStringLiteral("a"));
+    controller.searchNow();
+    QCOMPARE(startedSpy.count(), 1);
+    QVERIFY(fake->waitStarted());
+
+    // 実行中に条件が変わる → 2 本目の searchStarted がこの時点で飛ぶ。
+    // UI はここで古い行を捨てるので、1 本目の結果が遅れて来ても描かれない。
+    controller.setKind(efs::FileKind::Image);
+    QCOMPARE(startedSpy.count(), 2);
+    QCOMPARE(resultsSpy.count(), 0);
+
+    fake->release();              // 1 本目が完了 → 破棄される
+    QVERIFY(fake->waitStarted()); // 2 本目が実行に入る
+    fake->release();
+
+    QTRY_COMPARE(resultsSpy.count(), 1);
+    QTest::qWait(50);
+    QCOMPARE(resultsSpy.count(), 1);
+    QCOMPARE(startedSpy.count(), 2);
+
+    const QList<efs::SearchQuery> queries = fake->queries();
+    QCOMPARE(queries.size(), 2);
+    QCOMPARE(resultsFrom(resultsSpy, 0).id, queries.at(1).id);
+}
+
 // --- Phase 3: 設定復元 --------------------------------------------------------
 //
 // 起動時の復元で backend へ何本のクエリが飛ぶかを固定する。setKind / setRegex /
@@ -597,14 +725,16 @@ void TestSearchController::restoredDefaultOptionsIssueNoQuery()
     efs::SearchController controller(std::move(backend), kDebounceMs);
     QSignalSpy resultsSpy(&controller, &efs::SearchController::resultsReady);
     QSignalSpy clearedSpy(&controller, &efs::SearchController::cleared);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
 
     controller.restoreOptions({});
 
     QTest::qWait(4 * kDebounceMs);
     QCOMPARE(fake->queries().size(), 0);
     QCOMPARE(resultsSpy.count(), 0);
-    // 絞り込みが無いので「結果なし」を 1 回通知するだけ。
+    // 絞り込みが無いので「結果なし」を 1 回通知するだけ。Searching… にはしない。
     QCOMPARE(clearedSpy.count(), 1);
+    QCOMPARE(startedSpy.count(), 0);
 }
 
 // 種別が復元されていれば filter-only のクエリを 1 本だけ。
@@ -628,14 +758,19 @@ void TestSearchController::restoredFileKindIssuesAtMostOneQuery()
 
     constexpr int kDebounceMs = 20;
     efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
 
     efs::SearchOptions options;
     options.kind = kind;
     controller.restoreOptions(options);
 
+    // 復元の初回クエリでも UI が Searching… を出せること。
+    QCOMPARE(startedSpy.count(), 1);
+
     QTRY_COMPARE(fake->queries().size(), 1);
     QTest::qWait(4 * kDebounceMs);
     QCOMPARE(fake->queries().size(), 1); // 追加は飛ばない
+    QCOMPARE(startedSpy.count(), 1);
 
     const efs::SearchQuery query = fake->queries().at(0);
     QCOMPARE(query.kind, kind);
@@ -651,6 +786,7 @@ void TestSearchController::restoreDoesNotFanOutIntoMultipleQueries()
 
     constexpr int kDebounceMs = 20;
     efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
 
     const efs::SearchOptions options{.kind = efs::FileKind::Image,
                                      .regex = true,
@@ -661,6 +797,8 @@ void TestSearchController::restoreDoesNotFanOutIntoMultipleQueries()
     QTRY_COMPARE(fake->queries().size(), 1);
     QTest::qWait(6 * kDebounceMs);
     QCOMPARE(fake->queries().size(), 1);
+    // searchStarted も 1 回だけ (fan-out していない証拠をもう 1 本持つ)。
+    QCOMPARE(startedSpy.count(), 1);
 
     // 1 本のクエリに 4 つの値がすべて載っていること。
     const efs::SearchQuery query = fake->queries().at(0);

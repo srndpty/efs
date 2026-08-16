@@ -513,10 +513,30 @@ struct Settings {
      固定色のままだと Light テーマで見えなくなる (実測)。
   4. 計画 8 にあった `matchCase` / `matchPath` / `maxResults` / `debounceMs` の
      永続化は入れていない。UI から変更する経路が無く、保存しても意味が無いため。
-- 未対処 (実測値の提示にとどめた): `Image` + Regex ON の検索は Everything 側が
-  全走査になり **24.5 秒**かかることがある。UI はブロックしないが、IPC クエリは
-  中断できない契約なので、その間は直前の結果が残り続ける。フォールバックや
-  打ち切りは追加していない。
+- 実測: `Image` + Regex ON の検索は Everything 側が全走査になり **7.7〜24.5 秒**
+  かかる。UI はブロックしないが、IPC クエリは中断できない契約なので、その間
+  新しい検索は始まらない。**Everything 側の所要時間には手を入れない**
+  (cancel / timeout / fallback は追加しない)。
+
+**P3 review で追加した修正**
+
+1. **in-flight search の表示 authority。** 上記の 24.5 秒の間、検索欄は新しい
+   query なのに直前の結果が表示・操作できてしまっていた。`SearchController` に
+   `searchStarted` (クエリ発行時に同期発火) を足し、`MainWindow` はそこで
+   結果を空にし、backend error を下ろし、`Searching…` を出す (Regex の構文警告は
+   維持)。条件が無いときは従来どおり `cleared`。
+   `MainWindow` の ctor は **signal 接続とステータス初期化を `restoreOptions()`
+   より前**へ移した — 逆順だと復元時の初回 filter-only クエリだけ `Searching…` を
+   取りこぼす。`restoreOptions()` が fan-out しない契約は維持
+   (`searchStarted` の回数でも固定した)。
+2. **COM lifecycle。** `ShellIcon.cpp` の `thread_local` 初期化を RAII 化し、
+   `CoInitializeEx` が成功した (`S_OK` / `S_FALSE`) ときだけスレッド終了時に
+   `CoUninitialize` を 1 回呼ぶ。失敗時 (`RPC_E_CHANGED_MODE` 等) は呼ばない。
+   汎用 COM フレームワークは作っていない。
+3. **IconDelegate の cache churn。** placeholder は `m_pixmaps` に入れていない
+   ため `imagesReady` で全 clear する必要が無かった。`invalidate()` を削除し、
+   `viewport()->update()` だけにした。別キーのアイコン到着で解決済みキーを
+   `QImage`→`QPixmap` 再変換しない。
 
 ### Phase 4 — 将来 backend の受け皿 (MVP には不要・着手は任意)
 `BackendFactory` に `NativeNtfsBackend` の空実装を追加 (`isAvailable()` は false を返す) / backend 共通の適合テストスイート (両実装が同じテストを通ることを保証) / INI の隠し設定で backend 選択。

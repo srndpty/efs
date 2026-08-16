@@ -225,6 +225,13 @@ pwsh scripts/package.ps1
   飛ぶ。検索欄は起動時に空なので、発行されるのは高々 1 本
   (復元された kind が `All` なら 0 本)。回帰テストは `test_search_controller.cpp` の
   `restoreDoesNotFanOutIntoMultipleQueries` ほか。
+- **表示中の結果と現在の query を食い違わせない。** `SearchController` は
+  クエリ発行時に `searchStarted` を**同期で**発火し、`MainWindow` はそこで結果を
+  空にして `Searching…` を出す。Everything の IPC クエリは中断できず 20 秒以上
+  かかることがあるため、これが無いと「検索欄は別の条件なのに古い結果を開ける」
+  状態になる。**cancel / timeout / fallback は追加しない** — 直すのは表示だけ。
+  また `MainWindow` は controller の signal を繋いだ**後で** `restoreOptions()` を
+  呼ぶこと。逆にすると復元時の初回クエリだけ `Searching…` を取りこぼす。
 - **検索文字列を永続化しない。** search history と意味が混ざる。Phase 3 の
   スコープ外であり、`test_settings.cpp` の `searchTextIsNotPersisted` が
   INI のキー一覧ごと固定している。
@@ -236,7 +243,14 @@ pwsh scripts/package.ps1
   実ファイルへは触らない。`HICON` は `QImage` へコピー後に必ず `DestroyIcon`。
 - **アイコン完了通知に行番号を持たせない。** `IconCache::imagesReady` は
   viewport の塗り直しだけを促す。行を指す通知にすると、モデル reset 後や
-  高速な検索切替中に古い行を触って壊れる。
+  高速な検索切替中に古い行を触って壊れる。またここで `IconDelegate` の
+  `QPixmap` cache を全 clear しないこと — 未解決キーの placeholder は
+  cache に入れていないので塗り直すだけで本物に差し替わる。clear すると
+  アイコンが 1 つ届くたびに解決済み全件を再変換する。
+- **COM の初期化と解放を対にする。** `ShellIcon.cpp` の `CoInitializeEx` が
+  成功した (`S_OK` / `S_FALSE`) ときだけ、そのスレッドの終了時に
+  `CoUninitialize` を 1 回呼ぶ (`thread_local` な RAII)。`RPC_E_CHANGED_MODE`
+  等の失敗で呼ぶと、他所が張った初期化を剥がしてしまう。
 - **`windeployqt` だけでは `Everything64.dll` は入らない。** Qt の依存しか見ない
   ので、`scripts/package.ps1` の明示コピーを消さないこと。消すと配布版だけが
   「検索が全部失敗する」状態になる。

@@ -22,9 +22,12 @@ class IconDelegate : public QStyledItemDelegate {
 public:
     explicit IconDelegate(IconCache* cache, QObject* parent = nullptr);
 
-    // IconCache::imagesReady を受けたら呼ぶ。placeholder のまま描かれた行を
-    // 次の paint で本物に差し替えるため、変換済み QPixmap を捨てる。
-    void invalidate();
+    // IconCache::imagesReady に対して cache を捨てる必要は無い。
+    // placeholder は m_pixmaps に**入れていない**ので、次の paint で
+    // pixmapFor() が改めて IconCache に問い合わせ、届いた本物へ差し替わる。
+    // 受け手は viewport()->update() だけでよい。ここで全 clear すると、
+    // 別のキーのアイコンが 1 つ届くたびに解決済みの QImage→QPixmap 変換を
+    // すべてやり直すことになる。
 
 protected:
     void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override;

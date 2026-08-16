@@ -124,6 +124,9 @@ void SearchController::dispatch()
 
     SearchQuery query = m_query;
     query.id = startNewGeneration();
+    // 発行する前に通知する。UI はここで古い結果を捨てられる (実行中のクエリは
+    // 中断できないので、表示だけを現在の query に合わせる)。
+    emit searchStarted();
     emit runSearchRequested(query);
 }
 

@@ -126,9 +126,21 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
     // controller はツールバー構築より先に必要 (action が状態を読む)。
     m_controller =
         new SearchController(std::move(backend), SearchController::kDefaultDebounceMs, this);
+
+    // **接続とステータスの初期化は restoreOptions() より先に行う。**
+    // searchStarted は dispatch の中で同期に発火するので、後から繋ぐと復元時の
+    // 初回クエリだけ "Searching…" を取りこぼす。ここで繋ぐ相手 (m_model /
+    // statusBar / m_messageLabel) はすべて生成済み。
+    connect(m_controller, &SearchController::searchStarted, this, &MainWindow::onSearchStarted);
+    connect(m_controller, &SearchController::resultsReady, this, &MainWindow::onResultsReady);
+    connect(m_controller, &SearchController::cleared, this, &MainWindow::onCleared);
+
+    statusBar()->showMessage(QStringLiteral("Ready"));
+
     // 永続化された種別 / Regex / ソートをここでまとめて戻す。個別の setter を
     // 順に呼ぶと復元だけで最大 3 本のクエリが飛ぶ。検索欄は起動時に空なので、
-    // 発行されるのは「復元された kind が All 以外」のときの 1 本だけ。
+    // 発行されるのは「復元された kind が All 以外」のときの 1 本だけ
+    // (All なら 0 本 = cleared)。
     m_controller->restoreOptions(m_settings.options);
 
     buildTable();
@@ -143,13 +155,9 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
     layout->addWidget(m_tableView);
     setCentralWidget(central);
 
-    statusBar()->showMessage(QStringLiteral("Ready"));
-
     connect(m_searchEdit, &QLineEdit::textChanged, m_controller, &SearchController::setText);
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::updateRegexValidation);
     connect(m_searchEdit, &QLineEdit::returnPressed, m_controller, &SearchController::searchNow);
-    connect(m_controller, &SearchController::resultsReady, this, &MainWindow::onResultsReady);
-    connect(m_controller, &SearchController::cleared, this, &MainWindow::onCleared);
 
     m_searchEdit->setFocus();
 
@@ -291,10 +299,10 @@ void MainWindow::buildTable()
     m_tableView->setItemDelegate(m_iconDelegate);
     // 完了通知は行番号を持たない。viewport を塗り直すだけなので、通知が届いた
     // 時点でモデルが reset 済みでも / 行が消えていても不整合が起きない。
-    connect(m_iconCache, &IconCache::imagesReady, this, [this] {
-        m_iconDelegate->invalidate();
-        m_tableView->viewport()->update();
-    });
+    // 塗り直すだけでよい。placeholder は delegate 側にキャッシュしていないので、
+    // 次の paint で本物へ差し替わる (解決済みのアイコンは再変換されない)。
+    connect(m_iconCache, &IconCache::imagesReady, m_tableView->viewport(),
+            qOverload<>(&QWidget::update));
 
     QHeaderView* header = m_tableView->horizontalHeader();
     header->setStretchLastSection(false);
@@ -392,6 +400,19 @@ void MainWindow::setTheme(ThemeMode mode)
     // ネイティブのタイトルバーは Qt の palette では変わらない。
     applyTitleBarTheme(this, resolveDark(mode));
     refreshToolbarIcons();
+}
+
+void MainWindow::onSearchStarted()
+{
+    // 実行中のクエリは中断できないので、**表示だけ**を現在の query に合わせる。
+    // 古い行を残すと、検索欄はもう別の条件なのに前の結果が操作できてしまう
+    // (Everything の regex 検索は 20 秒以上かかることがある。README の実測)。
+    m_model->setRows({});
+    // 前回の失敗は「今の検索」の状態ではないので下ろす。
+    m_backendError.clear();
+    statusBar()->showMessage(QStringLiteral("Searching…"));
+    // Regex の構文警告は検索の進行とは無関係なので、あるなら維持する。
+    updateMessage();
 }
 
 void MainWindow::onResultsReady(const efs::SearchResults& results)

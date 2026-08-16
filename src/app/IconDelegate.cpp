@@ -26,11 +26,6 @@ IconDelegate::IconDelegate(IconCache* cache, QObject* parent)
     m_genericDirectory = toPixmap(shellIconImage({.isDirectory = true, .extension = {}}));
 }
 
-void IconDelegate::invalidate()
-{
-    m_pixmaps.clear();
-}
-
 QPixmap IconDelegate::pixmapFor(const QString& key) const
 {
     const auto cached = m_pixmaps.constFind(key);
