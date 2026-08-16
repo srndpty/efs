@@ -155,13 +155,13 @@ pwsh scripts/coverage.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 1 (MVP コア) 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 2 (MVP) 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
 | 0 | Qt 導入、Everything SDK の動的ロード、`ext:` + `regex:` の実機検証 (完了) |
 | 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) (完了) |
-| 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 |
+| 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 (完了) |
 | 3 | 設定永続化、エラー表示、アイコン、`windeployqt` |
 | 4 | 将来 backend の受け皿 (着手は任意) |
 
@@ -183,3 +183,21 @@ pwsh scripts/coverage.ps1
   `Everything_SetRegex` は常に FALSE のままにし、正規表現は `regex:` 項として
   クエリ文字列に埋め込む。計画に書かれていた「拡張子を正規表現に畳み込む」
   フォールバックは**不要であり、実装してはならない**。
+- **正規表現は `regex:"<入力>"` と必ず引用する** (Phase 2 で実機検証済み)。
+  Everything の search-term parser は空白と TAB を regex エンジンより先に項の
+  区切りとして解釈するため、引用しないと 1 つのパターンが複数の項へ割れる。
+  空白を含まないパターンでも結果は変わらないので無条件に囲む。パターン内部の
+  エスケープは補わない。
+- **検索するかどうかの判定は `hasSearchConstraint()`** (`core/SearchTypes.h`)。
+  「テキストが実質空 かつ `FileKind::All`」のときだけ検索しない。UI 側から
+  `buildQueryString()` を呼んで空判定する設計にはしない (UI が Everything 固有の
+  クエリ組み立てに依存してしまうため)。
+- **検索状態の authority は `SearchController`**。UI は `SearchQuery` を直接
+  編集しない。テキストだけがデバウンス対象で、種別 / Regex / ソートの変更は
+  明示操作なので即時再検索する (同値の再設定では発行しない)。
+- **フルパスは `core/PathUtils.h` の `fullPath()` だけが組み立てる。**
+  Everything はドライブ直下を `path="C:"`、ドライブ自体を `path="" name="C:"` で
+  返すので、素朴な連結ではドライブ相対パスになる。
+- **シェルのコマンド文字列を組み立てない。** ファイルを開く / Explorer で選択は
+  `QDesktopServices::openUrl` と `SHOpenFolderAndSelectItems`(PIDL) を使い、
+  Windows 固有処理は `app/FileActions.*` と `app/Theme.cpp` に閉じ込める。

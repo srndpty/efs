@@ -31,6 +31,16 @@ struct SearchQuery {
     int maxResults = kDefaultMaxResults;
 };
 
+// 絞り込み条件が 1 つでもあるか。無ければ検索そのものを行わない。
+//
+// backend 非依存に判定する。SearchController から buildQueryString() を呼んで
+// 空判定する設計にはしない (UI 側の状態機械が Everything 固有の文字列組み立てに
+// 依存してしまうため)。判定規則は「テキストが実質空 かつ FileKind::All」だけ。
+[[nodiscard]] inline bool hasSearchConstraint(const SearchQuery& query)
+{
+    return query.kind != FileKind::All || !query.text.trimmed().isEmpty();
+}
+
 struct ResultRow {
     QString name;
     QString path;       // 親ディレクトリのみ (フルパスは path + '\' + name)

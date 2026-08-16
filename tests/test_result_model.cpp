@@ -25,6 +25,7 @@ private slots:
     void headerLabels();
     void setRowsResetsModel();
     void invalidIndexReturnsNothing();
+    void fullPathRoleAndToolTip();
 
 private:
     static QVector<ResultRow> sampleRows();
@@ -160,9 +161,28 @@ void TestResultModel::invalidIndexReturnsNothing()
     model.setRows(sampleRows());
 
     QVERIFY(!model.data(QModelIndex(), Qt::DisplayRole).isValid());
-    // 未対応のロールは無効な QVariant を返す。
+    // 未対応のロールは無効な QVariant を返す。DecorationRole (結果行ごとの
+    // ファイルアイコン) は Phase 3。
     QVERIFY(!model.index(0, 0).data(Qt::DecorationRole).isValid());
-    QVERIFY(!model.index(0, 0).data(Qt::ToolTipRole).isValid());
+    QVERIFY(!model.index(0, 0).data(Qt::FontRole).isValid());
+}
+
+// フルパスは列に依らず同じで、ツールチップにも同じものが出る。
+// 文字列連結は core/PathUtils.h の 1 箇所だけが持つ (計画 8)。
+void TestResultModel::fullPathRoleAndToolTip()
+{
+    ResultTableModel model;
+    model.setRows(sampleRows());
+
+    for (int column = 0; column < ResultTableModel::ColumnCount; ++column) {
+        QCOMPARE(model.index(0, column).data(ResultTableModel::FullPathRole).toString(),
+                 QStringLiteral("C:\\docs\\report.pdf"));
+        QCOMPARE(model.index(0, column).data(Qt::ToolTipRole).toString(),
+                 QStringLiteral("C:\\docs\\report.pdf"));
+    }
+    // path が既に区切りで終わるドライブ直下でも二重にならない。
+    QCOMPARE(model.index(1, 0).data(ResultTableModel::FullPathRole).toString(),
+             QStringLiteral("C:\\docs"));
 }
 
 QTEST_GUILESS_MAIN(TestResultModel)

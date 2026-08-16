@@ -261,6 +261,17 @@ buildQueryString(q) =
 
 代替案として書かれていた「Regex ON のときは種別フィルタを拡張子の正規表現 `.*\.(jpg|png)$` へ畳み込むフォールバック」は **不要であり、実装してはならない**。この結論は `tests/test_query_builder.cpp` の `p0RegressionExtPlusRegex` と `tests/test_everything_backend.cpp` の `extAndRegexAreCombinedWithAnd` (陽性 + 陰性対照) で回帰テストとして固定してある。
 
+**Regex 項の引用（Phase 2 冒頭で実機確定・再検討不要）**: Phase 1 から持ち越していた「空白を含むパターンが 2 項に割れるのではないか」という懸念は、Everything 1.4.1.1022 に対する実測で**そのとおりだった**ことが確認された。
+
+- 引用しない `regex:^efsspike alpha` は `regex:^efsspike` と `alpha` の 2 項に割れる (正解 3 件に対して 4 件)。**空白だけでなく TAB も項の区切りとして解釈される。**
+- 引用した `regex:"^efsspike alpha"` は 1 項として渡り、`Everything_SetRegex(TRUE)` で得た正解集合と完全に一致した。`ext:` / `folder:` との AND も保たれる。
+- `[ ]` や `\ ` で空白を表す案は、`[` と `]`・`\` と ` ` の間で先に項が割れるため 0 件になり**使えない**。`\s` / `\x20` は動くが、ユーザーに打たせる記法を強制するので採らない。
+- 空白を含まないパターンを引用しても結果は変わらないため、**条件分岐せず無条件に囲む**。
+
+**確定方針: Regex ON のテキスト項は `regex:"<入力>"` とする。** パターン内部のエスケープは補わない (パターン自体が `"` を含む場合は壊れるが、NTFS のファイル名に `"` は入らないので実用上意味が無い)。詳細な観測値は README の「Phase 2 の検証結果」に記録した。回帰テストは `p2RegressionRegexWithSpaceIsQuoted` (単体) と `regexWithSpaceIsOneTerm` (実機・陽性 + 陰性対照)。
+
+**不正な正規表現は検出できない。** Everything は構文エラーを返さず、単に 0 件を返す (`GetLastError()` は `EVERYTHING_OK`)。したがって「Regex が壊れている」ことを backend から知る手段は無く、`SearchResults::error` にも載らない。検索欄を赤くする等の error UX は Phase 3 で UI 側の判断として実装するしかない。
+
 ### 6.3 `EverythingBackend::search()` — 1クエリの手順
 
 ```
@@ -422,22 +433,39 @@ struct Settings {
 ### Phase 2 — 不満点の解消 (MVP UX / このアプリを作る理由そのもの)
 種別フィルタツールバー (F3) / Regex トグル (F2) / ダークテーマ既定 (F7) / ヘッダソート = backend 再検索 (F5) / 打ち切り件数表示 (F6) / 右クリックメニュー + ダブルクリック/Enter で開く (F8)。
 
-**Phase 1 から持ち越した注意事項 (着手前に必ず読むこと)**
+**Phase 1 から持ち越した注意事項 → いずれも Phase 2 で解決済み**
 
-1. **Regex ON で空白を含むパターン。** 現在の `EverythingQueryBuilder` は
-   `regex:` + ユーザー入力そのままを 1 つの項として出す。Everything の
-   search-term parser は空白を AND 区切りとして扱うため、`^IMG \d+` のような
-   パターンが 2 項に割れる可能性がある。**Phase 2 の冒頭で、Everything 1.4.1 に
-   対して陽性・陰性の対照を付けた実機検証を行い、quoting/escaping の要否を
-   確定してから仕様を決める。** Phase 1 では憶測でエスケープやフォールバックを
-   実装していない (実測してから対処する方針どおり)。
+1. **Regex ON で空白を含むパターン。** 冒頭の実機検証で確定した。懸念どおり
+   空白 (と TAB) で項が割れるため、**`regex:"<入力>"` と引用する**。詳細は 6.2 と
+   README の「Phase 2 の検証結果」。
 
-2. **空テキスト + `FileKind != All`。** Phase 1 の `SearchController` は
-   「テキストが空 → 検索せず `cleared()`」と判定している。これはテキストしか
-   入力手段が無い Phase 1 でのみ正しい。Phase 2 で種別フィルタを入れると
-   「テキスト空・Image のみ」というフィルタ単独クエリを実行する必要があるため、
-   **この判定をそのまま流用してはならない。** 判定は「テキストが空」ではなく
-   「クエリ文字列全体が空 (= `buildQueryString()` が空)」へ移すのが素直。
+2. **空テキスト + `FileKind != All`。** 「テキストが空」判定は撤廃した。ただし
+   ここに書かれていた「`buildQueryString()` が空か」で判定する案は**採らなかった**。
+   それだと UI 側の状態機械が Everything 固有のクエリ組み立てに依存してしまう。
+   代わりに backend 非依存の述語 `hasSearchConstraint(SearchQuery)`
+   (`core/SearchTypes.h`。「テキストが実質空 **かつ** `FileKind::All`」なら false)
+   を置き、`SearchController` はこれだけを見る。
+
+**Phase 2 結果 (完了・受け入れ済み)**
+
+- 実装: 種別フィルタツールバー (`QActionGroup` 排他 + `Alt+1..6`) / Regex トグル
+  (`Ctrl+R`) / Dark 固定テーマ (`app/Theme.*`。`QPalette` + 小さな QSS。タイトルバーは
+  `DwmSetWindowAttribute` を 1 関数へ封じ込め) / ヘッダクリック → backend 再検索の
+  ソート / ダブルクリック・Enter で開く / 右クリックメニュー
+  (Open / Show in Explorer / Copy Full Path / Copy Name)。
+- `SearchController` が検索状態の authority になった。`setKind` / `setRegex` /
+  `setSort` は明示操作なのでデバウンスせず即時再検索し、同値の再設定では発行しない。
+  経路が増えても stale 破棄は既存の世代 id 1 本で成立している (新しい cancellation
+  機構は作っていない)。
+- フルパスの組み立ては `core/PathUtils.h` の `fullPath()` 1 箇所に寄せた。
+  Everything はドライブ直下を `path="C:"`、ドライブ自体を `path="" name="C:"` で
+  返すため、素朴な連結ではドライブ相対パスになってしまう (実測。README 参照)。
+- ファイル操作は `app/FileActions.*` に閉じ込め、`QDesktopServices::openUrl` と
+  `SHOpenFolderAndSelectItems`(PIDL) を使う。**シェルのコマンド文字列は組み立てない。**
+- ツールバーのアイコンは画像アセット / qrc / Qt Svg を持ち込まず `QPainter` で描いて
+  いる (`app/ToolbarIcons.*`)。結果行ごとのファイルアイコンは Phase 3 のまま。
+- fast sort (下の質問 10) は実測した。サイズ / 日時ソートの劣化は観測されず、
+  フォールバックや閾値は追加していない。数値は README。
 
 **Phase 2 完了 = MVP 完成。ここから Everything の代わりに日常使いを開始する。**
 
@@ -490,4 +518,4 @@ MVP (Phase 2 終了時) の受け入れ確認:
 7. **種別フィルタの拡張子リスト**をソースにハードコードするか、INI で編集可能にするか (MVP はハードコードを推奨。編集は Phase 3 以降)。
 8. **Everything 1.5 系へ将来移行する予定はあるか** (1.5 は別 SDK。予定があるなら `EverythingApi` を 1.4/1.5 両対応の形で切っておく余地を残す)。
 9. ~~**`ext:` と `regex:` の併用**が Everything 1.4.1 で動作しない場合、Regex ON 時は「種別フィルタを無効化 (グレーアウト)」と「拡張子を正規表現に畳み込む」のどちらを採るか。~~ → **解決済み。併用は動作するので、この問い自体が不要になった (6.2 参照)。**
-10. Everything の設定で **サイズ/日時の fast sort が有効になっているか** — 無効だとソート時のクエリが目に見えて遅くなる可能性がある。Phase 2 で実測して判断でよいか。
+10. ~~Everything の設定で **サイズ/日時の fast sort が有効になっているか** — 無効だとソート時のクエリが目に見えて遅くなる可能性がある。Phase 2 で実測して判断でよいか。~~ → **解決済み。** Phase 2 で実測した (Everything の設定は変更していない)。約 400 万件ヒットのクエリで Name / Path / Size / Date Modified のいずれも median 250〜400ms 程度に収まり、**サイズ / 日時ソートだけが遅いという事象は無かった**。フォールバックは不要 (README の実測表を参照)。なお filter-only の Document (拡張子 14 個) は 1 秒を超えることがあり、これが現状もっとも重いクエリ。

@@ -41,10 +41,24 @@ public:
     // Enter。デバウンスを待たずに即時検索する。
     void searchNow();
 
+    // --- 明示操作による状態変更 -----------------------------------------------
+    // いずれもユーザーが UI を 1 クリック/1 ショートカットで起こしたものなので
+    // デバウンスせず即時に再検索する。同じ値の再設定では何も発行しない。
+    // UI は SearchQuery を直接編集せず、必ずここを通す (検索状態の authority)。
+    void setKind(FileKind kind);
+    void setRegex(bool regex);
+    void setSort(SortKey key, SortOrder order);
+
+    [[nodiscard]] FileKind kind() const { return m_query.kind; }
+    [[nodiscard]] bool regex() const { return m_query.regex; }
+    [[nodiscard]] SortKey sortKey() const { return m_query.sortKey; }
+    [[nodiscard]] SortOrder sortOrder() const { return m_query.sortOrder; }
+
 signals:
     // 最新の request id の結果だけが流れる。
     void resultsReady(const efs::SearchResults& results);
-    // 検索文字列が空になった。UI は結果を空にする。
+    // 絞り込み条件が 1 つも無くなった (テキスト空 かつ FileKind::All)。
+    // UI は結果を空にする。
     void cleared();
     // 検索スレッドへの要求 (queued)。外から emit しない。
     void runSearchRequested(const efs::SearchQuery& query);

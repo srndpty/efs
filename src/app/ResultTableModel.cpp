@@ -1,6 +1,7 @@
 #include "app/ResultTableModel.h"
 
 #include "core/Formatting.h"
+#include "core/PathUtils.h"
 
 namespace efs {
 
@@ -44,6 +45,10 @@ QVariant ResultTableModel::data(const QModelIndex& index, int role) const
             return QVariant::fromValue(Qt::Alignment(Qt::AlignRight | Qt::AlignVCenter));
         return {};
     }
+
+    // フルパスは列に依らず同じ。ツールチップにも同じものを出す。
+    if (role == FullPathRole || role == Qt::ToolTipRole)
+        return fullPath(row);
 
     if (role != Qt::DisplayRole)
         return {};

@@ -3,8 +3,10 @@
 Everything を検索エンジンとして使う Windows 向けファイル検索 UI。
 アプリの UI 表示は英語。x64 のみ。
 
-現在の状態: **Phase 1 (MVP コア) 完了** — 検索欄に入力すると Everything の結果が
-テーブルに出る。種別フィルタ / Regex トグル / テーマ / ソート UI は Phase 2。
+現在の状態: **Phase 2 (MVP) 完了** — ダークテーマ既定、種別フィルタツールバー、
+Regex トグル、ヘッダクリックによる backend ソート、ダブルクリック / Enter で開く、
+右クリックメニュー (Open / Show in Explorer / Copy Full Path / Copy Name) まで動く。
+設定の永続化・結果行のアイコン・windeployqt は Phase 3。
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 この README には実測で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
@@ -53,7 +55,7 @@ clang-tidy は `compile_commands.json` を要求するので、lint だけは Ni
 |---|---|
 | `efs_core` | 静的ライブラリ。Qt Widgets に依存しないものすべて (core / backend / 検索スレッド / テーブルモデル) |
 | `efs` | WIN32 GUI 実行ファイル。`MainWindow` と `main()` だけを持つ |
-| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_result_model` / `test_search_controller` / `test_everything_api` / `test_everything_backend`) |
+| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_everything_api` / `test_everything_backend`) |
 
 QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けないため、テストは
 ファイル単位でターゲットを分けている。共通設定は `tests/CMakeLists.txt` の
@@ -122,6 +124,109 @@ Everything 1.4.1.1022 に対する実測で、その懸念の両面が確認さ�
   ただし **重いクエリの実行中にウィンドウを閉じると、そのクエリが終わるまで
   終了が待たされる**。Everything の IPC クエリは中断できないため意図した挙動
   (計画 4)。実測では 1 秒未満。
+
+## Phase 2 の検証結果
+
+### 空白を含む Regex — `regex:"<パターン>"` と引用する (実測で確定)
+
+Phase 1 から持ち越していた「Everything の search-term parser が空白を AND 区切り
+として扱うため、`^IMG \d+` のようなパターンが 2 項に割れるのではないか」という
+懸念は、**そのとおりだった**。
+
+検証は `tmp/` の使い捨て実行ファイルで行った (恒久ターゲットとしては残していない)。
+「たまたま 0 件」を PASS にしないよう、正解集合が人手で確定できるプローブファイルを
+`tmp/spike_data/` に置いて実測した:
+
+```
+efsspike alpha beta.txt   efsspike alpha.txt   efsspike alpha.dat   efsspikealpha.txt
+```
+
+`^efsspike alpha` の正解は前 3 者 (3 件)。純粋 Regex としての正解集合は診断目的で
+`Everything_SetRegex(TRUE)` を使って確認した (production は `FALSE` のまま)。
+
+| # | 検索文字列 (`Everything_SetRegex(FALSE)`) | 件数 | 判定 |
+|---|---|---|---|
+| A1 | `regex:^efsspike` (空白なし・対照) | 4 | 期待どおり |
+| B1 | `^efsspike alpha` (`SetRegex(TRUE)`・正解の基準) | **3** | — |
+| C1 | `regex:^efsspike alpha` (引用なし = Phase 1 の実装) | **4** | **NG。`regex:^efsspike` AND `alpha` の 2 項に割れている** |
+| C2 | `regex:"^efsspike alpha"` | **3** | **OK。正解と完全一致** |
+| C3 | `"regex:^efsspike alpha"` (項全体を引用) | 0 | NG。修飾子ごと文字列扱いになる |
+| C4 | `regex:^efsspike\salpha` | 3 | 一致するが、ユーザーに `\s` を打たせる必要がある |
+| C5 | `regex:^efsspike[ ]alpha` | **0** | NG。`[` と `]` の間で項が割れる |
+| C6 | `regex:^efsspike\x20alpha` | 3 | 一致するが C4 と同じ理由で不採用 |
+| C8 | `regex:^efsspike\ alpha` | 0 | NG |
+| D1 / D2 | 空白 2 個 (`^efsspike alpha beta`) 引用なし / あり | 1 / 1 | この例では差が出ない |
+| E1–E5 | 陰性対照 (一致しないパターン) | すべて 0 | 期待どおり |
+| F1 | `ext:txt regex:^efsspike alpha` | 3 | NG (割れる) |
+| F2 | `ext:txt regex:"^efsspike alpha"` | **2** | **OK。`ext:` との AND が保たれる** |
+| G1 / G2 | `\.` を含むパターン 引用なし / あり | 0 / 2 | 引用ありのみ正しい |
+| H1 | パターン内に生の TAB | 4 | **TAB も項の区切りとして解釈される** |
+
+引用の適用範囲も実測した:
+
+- `regex:"^efsspike"` — 空白が無くても引用してよい (引用なしと同じ結果)。
+  したがって**条件分岐せず無条件に囲む**。
+- `folder: regex:"^efsspikedir alpha"` — `folder:` との併用も可。
+- 引用の内側で `|` の選択、`{n}` の量指定子、`\.` のエスケープ、`;`、先頭の空白、
+  TAB がすべてリテラルとして生きる (`regex:"^efsspike<TAB>*alpha"` は
+  `efsspikealpha.txt` に一致した = 引用が TAB を守っている)。
+- **不正な正規表現 (`regex:"^efsspike("` 等) はエラーにならず 0 件を返す。**
+  `Everything_GetLastError()` は `EVERYTHING_OK` のまま。したがって
+  「正規表現が壊れている」ことを backend から検出する手段は無い。
+
+**確定仕様: `buildQueryString()` は Regex ON のとき `regex:"<入力>"` を出す。**
+パターン内部のエスケープは補わない。パターン自体が `"` を含む場合は項が壊れるが、
+NTFS のファイル名に `"` は入れられないので実用上意味が無く、実測でも crash はしない。
+TAB もファイル名に入れられない (プローブ作成時に win32 が拒否した) ため、
+「TAB 入り Regex」は引用の内側に入ることだけを保証すれば十分。
+
+回帰テストは `tests/test_query_builder.cpp` の `p2RegressionRegexWithSpaceIsQuoted` と
+`tests/test_everything_backend.cpp` の `regexWithSpaceIsOneTerm` (実機・陽性 + 陰性対照)。
+後者は引用を外すと実際に FAIL することを確認済み。
+
+### `ResultRow::path` の形 (フルパス組み立ての根拠)
+
+| 対象 | `path` | `name` |
+|---|---|---|
+| 通常のファイル | `C:\dev\soft\efs\tmp\spike_data` | `efsspike alpha.txt` |
+| **ドライブ直下のファイル** | `C:` (末尾に `\` が付かない) | `pagefile.sys` |
+| **ドライブそのもの** | (空文字) | `C:` |
+
+裸の `C:` はドライブ相対パスという別の意味になるため、`core/PathUtils.h` の
+`fullPath()` がこの 3 形を吸収する。
+
+### fast sort の実測
+
+Everything の設定は変更していない。同一クエリを 7 回ずつ実行 (ウォームアップ 1 回は除外):
+
+| クエリ | ソート | totalMatches | 返却行 | min | median | max |
+|---|---|---|---|---|---|---|
+| `e` | Name Asc | 3,991,512 | 5,000 | 235 | 396 | 433 ms |
+| `e` | Path Asc | 3,991,512 | 5,000 | 239 | 252 | 412 ms |
+| `e` | Size Desc | 3,991,512 | 5,000 | 268 | 389 | 451 ms |
+| `e` | Date Modified Desc | 3,991,512 | 5,000 | 216 | 283 | 344 ms |
+| `a` | Name Asc | 3,128,648 | 5,000 | 284 | 362 | 454 ms |
+| `a` | Path Asc | 3,128,648 | 5,000 | 251 | 352 | 443 ms |
+| `a` | Size Desc | 3,128,648 | 5,000 | 268 | 361 | 429 ms |
+| `a` | Date Modified Desc | 3,128,649 | 5,000 | 228 | 277 | 366 ms |
+
+**サイズ / 日時ソートが名前ソートより遅いという事象は観測されなかった。**
+計画 6.3 が懸念していた "fast sort 無効時の劣化" はこの環境では起きていない。
+フォールバックや閾値は追加していない。
+
+filter-only クエリ (テキスト空 + 種別) も測った:
+
+| 種別 | totalMatches | 初回 | warm min / median / max |
+|---|---|---|---|
+| Image | 2,410,502 | 265 | 215 / 374 / 475 ms |
+| Video | 101,812 | 229 | 183 / 332 / 400 ms |
+| Audio | 12,302 | 825 | 207 / 281 / 399 ms |
+| Document | 154,001 | 1,115 | 654 / 1,137 / 1,256 ms |
+| Directory | 748,871 | 384 | 159 / 181 / 376 ms |
+
+拡張子が 14 個ある Document が最も重く、1 秒を超えることがある。UI はブロックしない
+(検索スレッド + stale 破棄) が、ツールバーを押してから結果が出るまでに 1 秒前後
+かかる場合がある。**Phase 2 では対処しない** (実測値の提示にとどめる)。
 
 ## MVP の確定事項
 

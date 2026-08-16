@@ -21,6 +21,7 @@ private slots:
     void buildsExpectedQuery_data();
     void buildsExpectedQuery();
     void p0RegressionExtPlusRegex();
+    void p2RegressionRegexWithSpaceIsQuoted();
     void extensionListsAreDistinctAndLowerCase_data();
     void extensionListsAreDistinctAndLowerCase();
 };
@@ -50,12 +51,48 @@ void TestQueryBuilder::buildsExpectedQuery_data()
     QTest::newRow("regex off keeps text verbatim")
         << QStringLiteral("^IMG_\\d+") << FileKind::All << false << QStringLiteral("^IMG_\\d+");
 
-    // --- Regex ON → インライン修飾子 regex: -----------------------------------
+    // --- Regex ON → インライン修飾子 regex:"..." -------------------------------
+    // 引用符は Phase 2 冒頭の実機検証で確定した仕様 (README 参照)。空白を含まない
+    // パターンでも無条件に囲む (囲んでも結果が変わらないことを実測済み)。
     QTest::newRow("regex on") << QStringLiteral("^IMG_\\d+") << FileKind::All << true
-                              << QStringLiteral("regex:^IMG_\\d+");
+                              << QStringLiteral("regex:\"^IMG_\\d+\"");
     QTest::newRow("regex on with empty text") << QString() << FileKind::All << true << QString();
     QTest::newRow("regex on with whitespace only text")
         << QStringLiteral(" \t ") << FileKind::All << true << QString();
+
+    // --- Regex ON + 空白 (Phase 2 の中心仕様) ---------------------------------
+    QTest::newRow("regex with one space") << QStringLiteral("^IMG \\d+") << FileKind::All << true
+                                          << QStringLiteral("regex:\"^IMG \\d+\"");
+    QTest::newRow("regex with multiple spaces") << QStringLiteral("^a b c$") << FileKind::All
+                                                << true << QStringLiteral("regex:\"^a b c$\"");
+    QTest::newRow("regex with consecutive spaces")
+        << QStringLiteral("a  b") << FileKind::All << true << QStringLiteral("regex:\"a  b\"");
+    // TAB も Everything の項区切りなので、引用の内側に入っていること。
+    // (NTFS のファイル名に TAB は入れられないので一致はしないが、項が割れて
+    //  別のものが引っかかる方が悪い。実測で raw な TAB は分割された。)
+    QTest::newRow("regex with tab inside")
+        << QStringLiteral("a\tb") << FileKind::All << true << QStringLiteral("regex:\"a\tb\"");
+    // 前後の空白は Regex ON でも落とす (Regex OFF と同じ扱い)。
+    QTest::newRow("regex text is trimmed")
+        << QStringLiteral("  ^a b  ") << FileKind::All << true << QStringLiteral("regex:\"^a b\"");
+    QTest::newRow("regex with space + FileKind")
+        << QStringLiteral("^IMG \\d+") << FileKind::Image << true
+        << kImageExt + QStringLiteral(" regex:\"^IMG \\d+\"");
+    QTest::newRow("regex with space + Directory")
+        << QStringLiteral("^My Documents") << FileKind::Directory << true
+        << QStringLiteral("folder: regex:\"^My Documents\"");
+
+    // --- 引用符 / バックスラッシュを含むパターン -------------------------------
+    // バックスラッシュのエスケープは引用の内側でそのまま働く (実測)。
+    QTest::newRow("regex with backslash escapes")
+        << QStringLiteral("^efs\\.txt$") << FileKind::All << true
+        << QStringLiteral("regex:\"^efs\\.txt$\"");
+    QTest::newRow("regex with character class containing space")
+        << QStringLiteral("a[ _]b") << FileKind::All << true << QStringLiteral("regex:\"a[ _]b\"");
+    // パターン自体が " を含む場合は補正しない (エスケープの追加はしない)。
+    // NTFS のファイル名に " は入らないので実用上意味のあるパターンではない。
+    QTest::newRow("regex containing a double quote is passed through unmodified")
+        << QStringLiteral("a\"b") << FileKind::All << true << QStringLiteral("regex:\"a\"b\"");
 
     // --- 種別のみ -------------------------------------------------------------
     QTest::newRow("All has no prefix") << QString() << FileKind::All << false << QString();
@@ -74,9 +111,9 @@ void TestQueryBuilder::buildsExpectedQuery_data()
 
     // --- 種別 + Regex (Phase 0 で実機確定した形) ------------------------------
     QTest::newRow("Image + regex") << QStringLiteral("^a00") << FileKind::Image << true
-                                   << kImageExt + QStringLiteral(" regex:^a00");
+                                   << kImageExt + QStringLiteral(" regex:\"^a00\"");
     QTest::newRow("Directory + regex") << QStringLiteral("^tmp") << FileKind::Directory << true
-                                       << QStringLiteral("folder: regex:^tmp");
+                                       << QStringLiteral("folder: regex:\"^tmp\"");
 
     // --- 特殊文字はエスケープせずそのまま渡す (Everything の検索構文をそのまま
     //     使わせるための意図的な設計) ----------------------------------------
@@ -85,7 +122,7 @@ void TestQueryBuilder::buildsExpectedQuery_data()
         << QStringLiteral("a b*c?d\"e\" !f");
     QTest::newRow("regex metacharacters are passed through")
         << QStringLiteral("^(a|b)[0-9]{2}\\.txt$") << FileKind::All << true
-        << QStringLiteral("regex:^(a|b)[0-9]{2}\\.txt$");
+        << QStringLiteral("regex:\"^(a|b)[0-9]{2}\\.txt$\"");
     QTest::newRow("non ascii text") << QStringLiteral("報告書") << FileKind::Document << false
                                     << kDocumentExt + QStringLiteral(" 報告書");
 }
@@ -121,13 +158,43 @@ void TestQueryBuilder::p0RegressionExtPlusRegex()
     const QString built = efs::buildQueryString(query);
 
     QCOMPARE(built, QStringLiteral("ext:jpg;jpeg;png;gif;bmp;webp;tif;tiff;heic;svg;ico;cr2;nef "
-                                   "regex:^a00"));
+                                   "regex:\"^a00\""));
     // ext: は独立した先頭の項であり、regex: の後ろに埋め込まれていないこと。
     QVERIFY(built.startsWith(QStringLiteral("ext:")));
     QVERIFY(built.contains(QStringLiteral(" regex:")));
     QVERIFY(built.indexOf(QStringLiteral("ext:")) < built.indexOf(QStringLiteral("regex:")));
     // 拡張子を正規表現へ畳み込んだ形 (.*\.(jpg|png)$) になっていないこと。
     QVERIFY(!built.contains(QStringLiteral("(jpg|")));
+}
+
+// Phase 2 冒頭の実機検証 (tmp/ の spike。削除済み) が確定した結論の回帰テスト。
+//
+// Everything 1.4.1.1022 の search-term parser は空白/TAB を regex エンジンより
+// 先に項の区切りとして解釈する。したがって `regex:^efsspike alpha` は
+// `regex:^efsspike` AND `alpha` の 2 項になり、実測でも正解集合 3 件に対して
+// 4 件を返した。引用した `regex:"^efsspike alpha"` は 3 件で一致した。
+// 「引用符が外れる」形へ退化していないことを固定する。
+void TestQueryBuilder::p2RegressionRegexWithSpaceIsQuoted()
+{
+    SearchQuery query;
+    query.regex = true;
+    query.text = QStringLiteral("^IMG \\d+");
+
+    const QString built = efs::buildQueryString(query);
+
+    QCOMPARE(built, QStringLiteral("regex:\"^IMG \\d+\""));
+    // 空白がパターンの内側にあり、項として露出していないこと。
+    const qsizetype openQuote = built.indexOf(u'"');
+    const qsizetype closeQuote = built.lastIndexOf(u'"');
+    QVERIFY(openQuote >= 0);
+    QVERIFY(closeQuote > openQuote);
+    QVERIFY(built.indexOf(u' ') > openQuote);
+    QVERIFY(built.lastIndexOf(u' ') < closeQuote);
+    // 種別フィルタと併用しても、ext: 項だけが引用の外に残ること (P0 の結論)。
+    query.kind = FileKind::Image;
+    const QString withKind = efs::buildQueryString(query);
+    QVERIFY(withKind.startsWith(QStringLiteral("ext:")));
+    QVERIFY(withKind.endsWith(QStringLiteral(" regex:\"^IMG \\d+\"")));
 }
 
 void TestQueryBuilder::extensionListsAreDistinctAndLowerCase_data()
