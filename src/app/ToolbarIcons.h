@@ -22,4 +22,9 @@ namespace efs {
 // テーマ切替メニュー用 (Phase 3)。明暗の対比そのものを図形にする。
 [[nodiscard]] QIcon themeIcon(const QColor& ink);
 
+// ウィンドウ / タスクトレイ用のアプリアイコン (Phase 4)。
+// トレイの地は OS のテーマ次第で明暗どちらもありうるので、単色の線画ではなく
+// 塗りつぶした円の上に描いて、どちらの地でも視認できるようにする。
+[[nodiscard]] QIcon appIcon();
+
 } // namespace efs

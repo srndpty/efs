@@ -157,6 +157,32 @@ QIcon themeIcon(const QColor& ink)
     return {pixmap};
 }
 
+QIcon appIcon()
+{
+    QPixmap pixmap(kSize, kSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    // 地。トレイの背景が明るくても暗くても輪郭が出るよう、濃い円を敷く。
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor("#0a84ff"));
+    painter.drawEllipse(QRectF(2, 2, 60, 60));
+
+    // 虫めがね。検索アプリだと一目で分かる形にする。
+    QPen pen{QColor("#ffffff")};
+    pen.setWidthF(6.0);
+    pen.setCapStyle(Qt::RoundCap);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(QPointF(27, 27), 13, 13);
+    painter.drawLine(QPointF(37, 37), QPointF(48, 48));
+    painter.end();
+
+    return {pixmap};
+}
+
 QIcon regexIcon(const QColor& ink)
 {
     QPixmap pixmap(kSize, kSize);

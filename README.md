@@ -3,10 +3,11 @@
 Everything を検索エンジンとして使う Windows 向けファイル検索 UI。
 アプリの UI 表示は英語。x64 のみ。
 
-現在の状態: **Phase 3 完了** — MVP (種別フィルタ、Regex トグル、backend ソート、
+現在の状態: **Phase 4 完了** — MVP (種別フィルタ、Regex トグル、backend ソート、
 右クリックメニュー) に加えて、設定の永続化、テーマ切替 (System / Dark / Light)、
 backend error の非モーダル表示、Regex の構文警告、結果行のファイル種別アイコン、
-`windeployqt` による配布ディレクトリ生成まで動く。
+`windeployqt` による配布ディレクトリ生成、さらにタスクトレイ常駐 /
+グローバルホットキー / 多重起動防止 / `Program Files` への配置スクリプトまで動く。
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 この README には実測で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
@@ -56,13 +57,33 @@ Visual Studio ジェネレータはマルチ構成のため、configure プリ�
 clang-tidy は `compile_commands.json` を要求するので、lint だけは Ninja
 プリセット (`ninja-x64-debug`) を使う。これは Developer PowerShell が必要。
 
+### ビルドの並列化
+
+MSBuild は既定で **ターゲット内も、ターゲット間も直列**に走る。放っておくと
+32 論理コアの機械で CPU 使用率が 3〜7% しか出ず、フルリビルドに 95 秒かかっていた。
+効かせる軸は 2 つあり、**両方入れて初めて速くなる**。
+
+| 軸 | 手段 | 効果 (フルリビルド) |
+|---|---|---|
+| ターゲット内のファイル | `/MP` (top-level の `add_compile_options`) | 95 s → 38 s |
+| ターゲット間 | build プリセットの `"jobs": 0` (= `--parallel`、MSBuild の `/m`) | 38 s → **9 s** |
+
+`jobs: 0` は「ビルドツールの既定 = コア数」を意味する。台数固定の数値を書くと
+別の機械や CI で過不足が出るので数値は置かない。プリセット経由で叩く限り
+追加のフラグは要らない (素の `cmake --build <dir>` を使うときだけ `--parallel` を
+自分で付ける)。
+
+**`/MP` は Visual Studio ジェネレータのときだけ付ける。** Ninja は元から
+ファイル単位で並列に走るので二重になるうえ、`/MP` が `compile_commands.json` に
+入ると clang-tidy が余計な引数を見ることになる。
+
 ## ターゲット
 
 | ターゲット | 用途 |
 |---|---|
 | `efs_core` | 静的ライブラリ。Qt Widgets に依存しないものすべて (core / backend / 検索スレッド / テーブルモデル) |
 | `efs` | WIN32 GUI 実行ファイル。`MainWindow` と `main()` だけを持つ |
-| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_settings` / `test_regex_validation` / `test_icon_cache` / `test_everything_api` / `test_everything_backend`) |
+| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_settings` / `test_regex_validation` / `test_icon_cache` / `test_hotkey_spec` / `test_everything_api` / `test_everything_backend`) |
 
 QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けないため、テストは
 ファイル単位でターゲットを分けている。共通設定は `tests/CMakeLists.txt` の
@@ -78,6 +99,7 @@ QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けな�
 | カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
 | pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
 | 配布 | `pwsh scripts/package.ps1` — Release ビルド + `windeployqt` + `Everything64.dll` |
+| インストール | `pwsh scripts/install.ps1` — `dist\efs` を `Program Files` へ配置 + ショートカット (管理者権限が要る) |
 | CI | `.github/workflows/ci.yml` — format / build & test (Debug・Release) / lint / coverage / package |
 
 CI 上には Everything が存在しないため、IPC を伴うテストは `QSKIP` される。
@@ -203,7 +225,101 @@ Name 列に Windows のファイル種別アイコンを出す。
 
 `Ctrl+L` / `Ctrl+F` で検索欄へフォーカス + 全選択。`Esc` は検索文字列が
 入っていれば消す (空なら何もしない)。**`Esc` でアプリは終了しない。**
-グローバルホットキーは実装しない。
+アプリ外から呼び出すグローバルホットキーは Phase 4 で追加した (下記)。
+
+## 動作 (Phase 4)
+
+### タスクトレイ常駐
+
+閉じるボタンは**終了ではなく非表示**。終了はトレイメニューの `Quit` だけ。
+トレイアイコンのクリック / ダブルクリック、メニューの `Show efs`、
+グローバルホットキー、2 個目の起動 — 復帰経路はすべて
+`MainWindow::showAndActivate()` の 1 本に入る。最小化されていた場合は
+`showNormal()` ではなく最小化ビットだけを落とす (最大化していた状態を潰さない)。
+復帰したら検索欄にフォーカスして全選択するので、そのまま打ち始められる。
+
+閉じる = 終了でなくなったため、**設定の保存経路は 2 本**ある
+(隠す前の `closeEvent` と トレイの `Quit`)。片方だけにすると、その経路で
+終わったときに設定が飛ぶ。
+
+トレイが使えない環境 (`QSystemTrayIcon::isSystemTrayAvailable()` が false) では
+従来どおり閉じる = 終了。`QApplication::setQuitOnLastWindowClosed(false)` に
+しているので、この経路では `closeEvent` から明示的に `quit()` する — でないと
+「ウィンドウもトレイも無いのにプロセスだけ残る」状態になり、自力で戻せない。
+同じ理由で `--tray` はトレイが使えるときだけ隠して起動する。
+
+### グローバルホットキー
+
+既定 `Ctrl+Alt+E`。INI の `hotkey/show` に `Ctrl+Alt+E` のような**文字列**で
+持つ (int の生値にしない)。変更する UI は作っていない — INI を直接編集する。
+
+- 解釈は `app/HotkeySpec.*` の純粋関数。Win32 の `MOD_*` / 仮想キーへの写像は
+  `app/GlobalHotkey.cpp` の 1 箇所だけ。この分離で表記のテストが GUI 無しで書ける。
+- 受け付けるキーは `A-Z` / `0-9` / `F1-F24` / `Space`。修飾キーの綴りは
+  大文字小文字を問わず `Ctrl` (`Control`) / `Alt` / `Shift` / `Meta` (`Win`)。
+  出力は常に `Ctrl+Alt+Shift+Meta+<key>` の順に正規化する。
+- **修飾キー無しは拒否する** (OS 全体でそのキーを 1 つ奪ってしまう)。
+  空文字は「意図的に無効」として尊重し、解釈できない綴りは既定へ戻す
+  (壊れた INI で黙って無効になると「なぜか効かない」になるため)。
+- 登録は `RegisterHotKey(nullptr, …)`。**HWND を持たせない** — `WM_HOTKEY` は
+  スレッドのメッセージキューへ届くので、ウィンドウが隠れていても・作り直されても
+  Qt の native event filter で拾える。`MOD_NOREPEAT` を付けて、押しっぱなしで
+  前面化を連打しないようにする。
+- **登録に失敗しても起動を止めない。** 他アプリとの衝突は普通に起こるので、
+  検索欄の下に `Global hotkey Ctrl+Alt+E is unavailable (already in use by
+  another application).` と 1 行出すだけ (modal は出さない)。backend error と
+  Regex 警告の方が「今の操作」に近いので、表示の優先度はこれが最も低い。
+
+### 多重起動防止
+
+名前付き mutex (`Local\` 名前空間 = ログオンセッション単位) で 2 個目を検出し、
+`RegisterWindowMessageW` で得たメッセージ ID を `HWND_BROADCAST` へ投げてから
+自分は終了する。既存インスタンスは native event filter でそれを受けて
+`showAndActivate()` する (常駐中はウィンドウが隠れているのでブロードキャストが要る)。
+**この 1 経路のために Qt Network (`QLocalServer`) は入れない。**
+
+### インストール
+
+```powershell
+pwsh scripts/package.ps1                      # → dist\efs\
+pwsh scripts/install.ps1                      # 管理者 PowerShell で実行
+pwsh scripts/install.ps1 -NoStartup           # ログオン時の自動起動なし
+pwsh scripts/install.ps1 -Uninstall
+```
+
+`dist\efs` を `%ProgramFiles%\efs` へコピーし、スタートメニューと (既定では)
+スタートアップにショートカットを作る。スタートアップのショートカットだけは
+`--tray` を渡し、ログオン時にウィンドウを出さずトレイに常駐させる
+(「起動時に隠す」ための設定項目は増やさない)。
+
+- **インストーラ (MSI / MSIX / NSIS / WiX) は作らない。コード署名もしない。**
+  個人用ツールであり、未署名インストーラの SmartScreen 警告を避けられる
+  この方式で足りる。
+- 事前確認は「管理者かどうか」ではなく**実際に書けるか**。`-Destination` に
+  ユーザー書き込み可能な場所を指せば、昇格なしでスクリプト自体を検証できる。
+  ショートカット 2 つはユーザープロファイル配下なので、昇格が要るのは
+  `Program Files` へのコピーだけ。
+- **設定は `%APPDATA%\efs\efs.ini` のまま。インストール先には何も書かない。**
+  だから非管理者でも普通に使えるし、アンインストールしても設定は残る。
+  設定を exe の隣に置く「ポータブル版」は作らない。
+- 常駐しているのが普通なので、上書きの前に実行中の efs を
+  `CloseMainWindow()` (設定の保存を走らせるため) → 応答しなければ強制終了、
+  の順で止める。置き換えは全消し → コピーで、古い版のファイルを残さない。
+
+Everything 本体は引き続き別途常駐が必要。Everything のトレイアイコンを消したい
+場合は Everything 側の `show_tray_icon=0` にする (efs のコードは関与しない)。
+
+### Phase 4 の実機確認
+
+Debug ビルドで確認した (GUI の自動テストは書かない方針なので、ここは手動)。
+
+| 確認 | 結果 |
+|---|---|
+| 2 個目の起動 | 即座に終了コード 0 で終わり、プロセスは 1 つのまま |
+| 2 個目の起動 → 既存インスタンス | 隠れていたウィンドウが前面に戻る |
+| 閉じるボタン | プロセスは生き続け、`%APPDATA%\efs\efs.ini` が更新される (`hotkey/show=Ctrl+Alt+E` を含む) |
+| `Ctrl+Alt+E` (ウィンドウを隠した状態) | ウィンドウが戻る |
+| `efs.exe --tray` | ウィンドウを出さずに常駐し、`Ctrl+Alt+E` で出せる |
 
 ## 配布
 

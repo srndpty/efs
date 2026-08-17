@@ -20,12 +20,14 @@ class QLabel;
 class QLineEdit;
 class QModelIndex;
 class QPoint;
+class QSystemTrayIcon;
 class QTableView;
 class QToolBar;
 class QToolButton;
 
 namespace efs {
 
+class GlobalHotkey;
 class IconCache;
 class IconDelegate;
 class ResultTableModel;
@@ -39,7 +41,18 @@ public:
     explicit MainWindow(std::unique_ptr<ISearchBackend> backend, Settings settings,
                         QWidget* parent = nullptr);
 
+    // ホットキー / トレイのクリック / 2 個目の起動 から呼ばれる共通の入口。
+    // 隠れていれば出し、最小化されていれば戻し、前面へ持ってきて検索欄を選択する。
+    // (接続は関数ポインタ構文なので slot にする必要は無い。)
+    void showAndActivate();
+
+    // トレイに常駐できているか。false なら閉じる = 終了であり、`--tray` で
+    // 起動しても隠れたままにしてはいけない (呼び出す手段が無くなる)。
+    [[nodiscard]] bool hasTrayIcon() const { return m_tray != nullptr; }
+
 protected:
+    // **閉じるボタンでは終了しない** (常駐アプリ)。設定を保存して隠すだけ。
+    // 終了はトレイメニューの Quit だけが行う。
     void closeEvent(QCloseEvent* event) override;
 
 private:
@@ -48,6 +61,12 @@ private:
     void buildTable();
     void buildRowActions();
     void buildSearchShortcuts();
+    void buildTrayIcon();
+    // 設定をメンバへ集めて INI へ書く。隠すときと終了するときの両方で呼ぶ
+    // (閉じる = 終了ではなくなったので、closeEvent だけでは足りない)。
+    void saveSettings();
+    // 起動時とホットキー変更時に呼ぶ。失敗しても起動は止めず、理由を出すだけ。
+    void applyHotkey();
 
     // クエリを発行した時点で表示を現在の query に合わせる (古い結果を残さない)。
     void onSearchStarted();
@@ -84,10 +103,14 @@ private:
     SearchController* m_controller = nullptr;
     IconCache* m_iconCache = nullptr;
     IconDelegate* m_iconDelegate = nullptr;
+    QSystemTrayIcon* m_tray = nullptr;
+    GlobalHotkey* m_hotkey = nullptr;
 
     // 直近の検索が失敗した理由。正常に完了した検索で解除する。
     QString m_backendError;
     QString m_regexWarning;
+    // ホットキーを登録できなかった理由 (他アプリと衝突している等)。
+    QString m_hotkeyWarning;
 
     // テーマ変更時にアイコンを描き直すために保持する。
     std::array<QAction*, 6> m_kindActions{};

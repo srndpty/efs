@@ -1,6 +1,7 @@
 #include "app/MainWindow.h"
 
 #include "app/FileActions.h"
+#include "app/GlobalHotkey.h"
 #include "app/IconCache.h"
 #include "app/IconDelegate.h"
 #include "app/RegexValidation.h"
@@ -22,6 +23,7 @@
 #include <QMenu>
 #include <QPalette>
 #include <QStatusBar>
+#include <QSystemTrayIcon>
 #include <QTableView>
 #include <QToolBar>
 #include <QToolButton>
@@ -109,6 +111,7 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
     : QMainWindow(parent), m_settings(std::move(settings))
 {
     setWindowTitle(QStringLiteral("efs"));
+    setWindowIcon(appIcon());
 
     m_searchEdit = new QLineEdit(this);
     m_searchEdit->setPlaceholderText(QStringLiteral("Search…"));
@@ -147,6 +150,7 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
     buildToolBar();
     buildRowActions();
     buildSearchShortcuts();
+    buildTrayIcon();
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
@@ -170,6 +174,79 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
         restoreState(m_settings.windowState);
 
     setTheme(m_settings.theme);
+
+    // ホットキーは最後に。失敗しても起動は止めず、メッセージ行に理由を出すだけ。
+    m_hotkey = new GlobalHotkey(this);
+    connect(m_hotkey, &GlobalHotkey::activated, this, &MainWindow::showAndActivate);
+    applyHotkey();
+}
+
+void MainWindow::buildTrayIcon()
+{
+    if (!QSystemTrayIcon::isSystemTrayAvailable())
+        return;
+
+    auto* menu = new QMenu(this);
+    auto* showAction = menu->addAction(QStringLiteral("Show efs"));
+    connect(showAction, &QAction::triggered, this, &MainWindow::showAndActivate);
+    menu->addSeparator();
+    auto* quitAction = menu->addAction(QStringLiteral("Quit"));
+    // **唯一の終了経路。** 閉じるボタンは隠すだけなので、ここを消すと
+    // アプリを終了できなくなる。
+    connect(quitAction, &QAction::triggered, this, [this] {
+        saveSettings();
+        QApplication::quit();
+    });
+
+    m_tray = new QSystemTrayIcon(appIcon(), this);
+    m_tray->setToolTip(QStringLiteral("efs"));
+    m_tray->setContextMenu(menu);
+    connect(m_tray, &QSystemTrayIcon::activated, this,
+            [this](QSystemTrayIcon::ActivationReason reason) {
+                // 右クリックはコンテキストメニューなので拾わない。
+                if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick)
+                    showAndActivate();
+            });
+    m_tray->show();
+}
+
+void MainWindow::showAndActivate()
+{
+    // 最小化されていれば戻す。showNormal() だと最大化状態を潰してしまうので、
+    // 最小化ビットだけを落とす。
+    if (isMinimized())
+        setWindowState(windowState() & ~Qt::WindowMinimized);
+    show();
+    raise();
+    activateWindow();
+
+    // 呼び出し直後にそのまま打ち始められるようにする。
+    m_searchEdit->setFocus();
+    m_searchEdit->selectAll();
+}
+
+void MainWindow::applyHotkey()
+{
+    QString reason;
+    if (m_hotkey->bind(parseHotkey(m_settings.hotkey), &reason)) {
+        m_hotkeyWarning.clear();
+    } else {
+        // 衝突は普通に起こる。起動は止めず、非モーダルに理由を出すだけ。
+        m_hotkeyWarning =
+            QStringLiteral("Global hotkey %1 is unavailable (%2).").arg(m_settings.hotkey, reason);
+        qWarning("グローバルホットキー %s を登録できない: %s", qUtf8Printable(m_settings.hotkey),
+                 qUtf8Printable(reason));
+    }
+    updateMessage();
+}
+
+void MainWindow::saveSettings()
+{
+    m_settings.options = m_controller->options();
+    m_settings.windowGeometry = saveGeometry();
+    m_settings.windowState = saveState();
+    m_settings.headerState = m_tableView->horizontalHeader()->saveState();
+    m_settings.save();
 }
 
 void MainWindow::buildToolBar()
@@ -383,14 +460,23 @@ void MainWindow::buildSearchShortcuts()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
-    // 保存は終了時の 1 回だけ。検索文字列・履歴・結果行は保存しない。
-    m_settings.options = m_controller->options();
-    m_settings.windowGeometry = saveGeometry();
-    m_settings.windowState = saveState();
-    m_settings.headerState = m_tableView->horizontalHeader()->saveState();
-    m_settings.save();
+    // 検索文字列・履歴・結果行は保存しない (Phase 3 の契約)。
+    saveSettings();
 
+    // トレイが使えるなら閉じるボタンでは終了しない。常駐したままにして、
+    // ホットキー / トレイから即座に戻れるようにする。終了は Quit だけ。
+    if (m_tray != nullptr) {
+        hide();
+        event->ignore();
+        return;
+    }
+
+    // トレイが使えない環境では従来どおり閉じる = 終了。main() が
+    // setQuitOnLastWindowClosed(false) にしているので、ここで明示的に終了させる
+    // — でないと「ウィンドウもトレイも無いのにプロセスだけ残る」状態になる。
     QMainWindow::closeEvent(event);
+    if (event->isAccepted())
+        QApplication::quit();
 }
 
 void MainWindow::setTheme(ThemeMode mode)
@@ -466,11 +552,14 @@ void MainWindow::updateRegexValidation()
 void MainWindow::updateMessage()
 {
     // backend error を優先する。両方出しても行が増えるだけで判断は変わらない。
+    // ホットキーの警告は起動時に 1 度出るだけなので優先度は最も低い。
     QString text;
     if (!m_backendError.isEmpty())
         text = QStringLiteral("Search failed: %1").arg(m_backendError);
-    else
+    else if (!m_regexWarning.isEmpty())
         text = m_regexWarning;
+    else
+        text = m_hotkeyWarning;
 
     m_messageLabel->setText(text);
     m_messageLabel->setVisible(!text.isEmpty());

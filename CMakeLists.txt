@@ -12,6 +12,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(EFS_BUILD_TESTS "テストをビルドする" ON)
 
+# MSBuild は 1 ターゲット内のファイルを 1 つずつ順にコンパイルするため、コア数に
+# 対して CPU がほとんど遊ぶ (実測: 32 論理コアで 3〜7%)。/MP でターゲット内の
+# ファイルを並列にコンパイルする (ディレクトリスコープなので tests/ にも継承)。
+# ターゲット間の並列は build プリセットの `jobs` (= MSBuild の /m) が担当する。
+#
+# **Ninja には付けない。** Ninja は既にファイル単位で並列に走らせるので二重に
+# なるうえ、`/MP` が compile_commands.json へ入ると clang-tidy が余計な引数を
+# 見ることになる。
+if(MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
+    add_compile_options(/MP)
+endif()
+
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets)
 qt_standard_project_setup()
 
@@ -64,6 +76,8 @@ add_library(efs_core STATIC
     src/app/Settings.cpp
     src/app/RegexValidation.h
     src/app/RegexValidation.cpp
+    src/app/HotkeySpec.h
+    src/app/HotkeySpec.cpp
     src/app/IconCache.h
     src/app/IconCache.cpp
     src/app/Theme.h
@@ -96,6 +110,10 @@ qt_add_executable(efs WIN32
     src/app/ShellIcon.cpp
     src/app/IconDelegate.h
     src/app/IconDelegate.cpp
+    src/app/GlobalHotkey.h
+    src/app/GlobalHotkey.cpp
+    src/app/SingleInstance.h
+    src/app/SingleInstance.cpp
 )
 # dwmapi: タイトルバーの明暗 (Theme.cpp)。
 # shell32 / ole32: Explorer で選択 (FileActions.cpp) と種別アイコンの

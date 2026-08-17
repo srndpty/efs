@@ -128,6 +128,12 @@ pwsh scripts/package.ps1
   .tidy20\Scripts\pip install clang-tidy==20.1.0
   pwsh scripts/lint.ps1 -ClangTidy .tidy20\Scripts\clang-tidy.exe
   ```
+- **ビルドの並列化はプリセットに入っている。** MSBuild はターゲット内も
+  ターゲット間も既定で直列に走るため、`/MP` (top-level の `add_compile_options`。
+  **Visual Studio ジェネレータのときだけ**) と build プリセットの `"jobs": 0`
+  (= `--parallel`) の**両方**が要る。片方だけだと大して速くならない
+  (実測: 95 s → 38 s → 9 s。README の表)。素の `cmake --build <dir>` を叩くとき
+  だけ `--parallel` を自分で付けること。
 - **QtTest はリダイレクトされると標準出力に何も書かない。** Windows では
   コンソールが無いと判断すると `OutputDebugString` へ送るため、ctest から
   実行すると結果が見えない。`tests/CMakeLists.txt` で
@@ -160,7 +166,7 @@ pwsh scripts/package.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 3 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 4 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
@@ -168,7 +174,13 @@ pwsh scripts/package.ps1
 | 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) (完了) |
 | 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 (完了) |
 | 3 | 設定永続化、テーマ切替、エラー表示、Regex 構文警告、結果アイコン、`windeployqt` 配布 (完了) |
-| 4 | 将来 backend の受け皿 (着手は任意) |
+| 4 | トレイ常駐、グローバルホットキー、多重起動防止、`Program Files` への配置 (完了) |
+| 5 | 将来 backend の受け皿 (着手条件を満たしていない) |
+| 6 | 実利用で不満が出たときだけ着手する候補の置き場 (未確定) |
+
+Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が実在するか」であり、
+当初の並びではない。Phase 6 に並んでいるのは **「やる」ではなく「不満として
+実在したらやる」** 候補なので、先回りして実装しない。
 
 ---
 
@@ -265,3 +277,33 @@ pwsh scripts/package.ps1
 - **ツールバーアイコンの色を固定値で持たない。** palette の `ButtonText` から
   取り、テーマ変更時に描き直す (`MainWindow::refreshToolbarIcons`)。固定色だと
   Light テーマで見えなくなる。
+
+### Phase 4 で追加した不変条件
+
+- **閉じるボタンは終了ではない。** トレイが使えるなら設定を保存して隠すだけで、
+  終了はトレイメニューの `Quit` だけ。したがって**設定の保存経路は 2 本**ある
+  (`closeEvent` と `Quit`)。片方だけにすると、その経路で終わったときに設定が飛ぶ。
+- **「呼び出す手段が無いのに生きているプロセス」を作らない。**
+  `setQuitOnLastWindowClosed(false)` の副作用なので、トレイが使えない環境では
+  `closeEvent` から明示的に `QApplication::quit()` する。同じ理由で `--tray` は
+  `MainWindow::hasTrayIcon()` が true のときだけ隠して起動する。
+- **復帰経路は `MainWindow::showAndActivate()` の 1 本に集約する。**
+  ホットキー / トレイのクリック / 2 個目の起動 がすべてここへ入る。
+  最小化されている場合は `showNormal()` ではなく最小化ビットだけを落とす
+  (最大化していた状態を潰さないため)。
+- **グローバルホットキーは HWND を持たせず `RegisterHotKey(nullptr, …)` で
+  登録する。** `WM_HOTKEY` はスレッドのメッセージキューへ届くので、ウィンドウが
+  隠れていても・作り直されても native event filter で拾える。`MOD_NOREPEAT` を
+  必ず付ける (押しっぱなしで前面化を連打しない)。
+- **ホットキーの登録に失敗しても起動を止めない。** 他アプリとの衝突は普通に
+  起こる。非モーダルに 1 行出すだけで、アプリは通常どおり使えること。
+- **ホットキーは INI に文字列で持つ** (`hotkey/show` = `Ctrl+Alt+E`。int の生値に
+  しない)。表記の解釈は `app/HotkeySpec.*` の純粋関数、Win32 の `MOD_*` /
+  仮想キーへの写像は `app/GlobalHotkey.cpp` だけ。**修飾キー無しは拒否**
+  (OS 全体でそのキーを奪う)。空文字は「意図的に無効」として尊重し、解釈できない
+  綴りは既定へ戻す。変更する UI は作らない (設定ダイアログを作らない方針は維持)。
+- **多重起動防止のために Qt Network を入れない。** 名前付き mutex (`Local\` =
+  セッション単位) と `RegisterWindowMessageW` のブロードキャストで足りる。
+- **インストール先には何も書かない。** 設定は `%APPDATA%\efs\efs.ini` のまま。
+  これを壊すと非管理者で動かなくなる (設定を exe の隣へ置く「ポータブル版」は
+  作らない)。インストーラとコード署名は恒久的に作らない。
