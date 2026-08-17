@@ -469,7 +469,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
     saveSettings();
 
     // トレイが使えるなら閉じるボタンでは終了しない。常駐したままにして、
-    // ホットキー / トレイから即座に戻れるようにする。終了は Quit だけ。
+    // ホットキー / トレイから即座に戻れるようにする。終了するのは
+    // quitApplication() だけ (トレイの Quit と `--quit` IPC)。
     if (m_tray != nullptr) {
         hide();
         event->ignore();

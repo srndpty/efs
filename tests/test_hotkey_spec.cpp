@@ -26,6 +26,8 @@ private slots:
     void modifierOnlyIsRejected();
     void emptyTokensAreRejected_data();
     void emptyTokensAreRejected();
+    void duplicateModifiersAreRejected_data();
+    void duplicateModifiersAreRejected();
     void formatIsNormalized_data();
     void formatIsNormalized();
     void roundTrip_data();
@@ -153,6 +155,25 @@ void TestHotkeySpec::emptyTokensAreRejected_data()
 }
 
 void TestHotkeySpec::emptyTokensAreRejected()
+{
+    QFETCH(QString, text);
+    QVERIFY(!efs::parseHotkey(text).isValid());
+}
+
+// 同じ修飾キーの重複も打ち間違い。黙って 1 つに畳まない。
+void TestHotkeySpec::duplicateModifiersAreRejected_data()
+{
+    QTest::addColumn<QString>("text");
+
+    QTest::newRow("Ctrl 2 回") << QStringLiteral("Ctrl+Ctrl+E");
+    QTest::newRow("別名で 2 回") << QStringLiteral("Ctrl+Control+E");
+    QTest::newRow("別名で 2 回 (大小混在)") << QStringLiteral("control+CTRL+E");
+    QTest::newRow("Alt 2 回") << QStringLiteral("Alt+Alt+F1");
+    QTest::newRow("Meta と Win") << QStringLiteral("Meta+Win+K");
+    QTest::newRow("3 個の途中で重複") << QStringLiteral("Ctrl+Alt+Ctrl+E");
+}
+
+void TestHotkeySpec::duplicateModifiersAreRejected()
 {
     QFETCH(QString, text);
     QVERIFY(!efs::parseHotkey(text).isValid());

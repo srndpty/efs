@@ -56,7 +56,7 @@ public:
 
 protected:
     // **閉じるボタンでは終了しない** (常駐アプリ)。設定を保存して隠すだけ。
-    // 終了はトレイメニューの Quit だけが行う。
+    // 終了するのは quitApplication() だけ (トレイの Quit と `--quit` IPC)。
     void closeEvent(QCloseEvent* event) override;
 
 private:

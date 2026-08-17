@@ -6,6 +6,7 @@
 #include "backend/everything/EverythingBackend.h"
 
 #include <QApplication>
+#include <QMessageBox>
 #include <QSettings>
 #include <QStringList>
 
@@ -42,14 +43,22 @@ int main(int argc, char** argv)
         }
         return 0;
     }
-    case efs::InstanceRole::Error:
+    case efs::InstanceRole::Error: {
         // 多重起動の判定そのものができなかった。**Secondary と同一視しない。**
-        // 通常の起動は続ける (アプリは使えるが多重起動は防げない) 一方、
-        // `--quit` は届けようが無いので明確に失敗させる。
-        qWarning("多重起動の判定ができない: %s", qUtf8Printable(instance.errorReason()));
-        if (quitRequested)
-            return 1;
-        break;
+        // かつ **fail-open にしない** — single instance は Phase 4 の前提
+        // (トレイ常駐 + グローバルホットキー + `--quit` はどれも「efs は 1 つ」
+        // が成り立って初めて意味を持つ)。判定できないまま起動を許すと、
+        // ホットキーの奪い合いや設定の上書き合いが起きる状態になる。
+        qCritical("多重起動の判定ができない: %s", qUtf8Printable(instance.errorReason()));
+        if (!quitRequested) {
+            // コンソールを持たない GUI アプリなので、理由は短く modal で出す
+            // (起動できない理由が何も出ないと、ただ消えたようにしか見えない)。
+            QMessageBox::critical(
+                nullptr, QStringLiteral("efs"),
+                QStringLiteral("efs cannot start: %1").arg(instance.errorReason()));
+        }
+        return 1;
+    }
     case efs::InstanceRole::Primary:
         // 終わらせる相手が居ない = すでに目的は達成されている。UI は出さない。
         if (quitRequested)
@@ -58,7 +67,8 @@ int main(int argc, char** argv)
     }
 
     // 閉じるボタンは「隠す」なので、最後のウィンドウが閉じても終了させない。
-    // 終了はトレイメニューの Quit だけ。
+    // 終了するのは MainWindow::quitApplication() だけ
+    // (トレイの Quit と `--quit` IPC が呼ぶ)。
     QApplication::setQuitOnLastWindowClosed(false);
 
     // 設定が無い / 壊れている / スキーマが違う場合は既定値 (Dark / All /

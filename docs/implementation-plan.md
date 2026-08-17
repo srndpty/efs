@@ -548,7 +548,8 @@ Phase 3 完了時点で日常利用を開始し、**実際に使ってみて欲�
 やること:
 
 1. **タスクトレイ常駐** — `QSystemTrayIcon`。閉じるボタンは終了ではなく非表示。
-   終了はトレイメニューの Quit だけ。
+   終了は `MainWindow::quitApplication()` 1 本に集約し、caller はトレイメニューの
+   Quit と `efs.exe --quit` (P4 review で追加)。`closeEvent` は保存して隠すだけ。
 2. **グローバルホットキー** — `RegisterHotKey`。既定 `Ctrl+Alt+E`。
    常駐の実質的な前提 (ホットキーが無いと常駐する意味が薄い)。
 3. **多重起動防止** — 常駐アプリなので必須。2 個目の起動は既存インスタンスを
@@ -618,7 +619,18 @@ Everything の自動起動 / Everything 1.5 対応。
    `RegisterWindowMessageW` の失敗も同じ infrastructure error として扱う。
 5. **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等を invalid に)。
    `Qt::SkipEmptyParts` をやめ、table-driven の回帰テストを追加した。
-6. **exe のアイコン (Explorer 表示)。** シェルが出すアイコンは PE リソース
+6. **rollback の状態を 2 つに分けた (final review)。** 「旧版を退避した」と
+   「新版を配置した」を 1 つのフラグで持っていたため、**その 2 つの間で失敗すると
+   旧版を戻さないまま backup を消す** (= インストールが丸ごと消える) 経路が
+   あった。`previousBackedUp` / `newPlaced` に分け、初回インストールで途中失敗
+   した場合は partial な配置先を削除する。3 箇所へ fault injection を入れて実測
+   した (injection 自体は残していない)。
+7. **`InstanceRole::Error` を fail-open にしない (final review)。** 通常起動も
+   短い modal を出して exit 1 にした。single instance は常駐 / ホットキー /
+   `--quit` の前提そのもので、判定できないまま起動を許すと efs が複数常駐しうる。
+8. **同じ修飾キーの重複を invalid にした (final review)。**
+   `Ctrl+Ctrl+E` / `Ctrl+Control+E` / `Meta+Win+K` を 1 つに畳まない。
+9. **exe のアイコン (Explorer 表示)。** シェルが出すアイコンは PE リソース
    なので、実行時に `QPainter` で描く方式では出せない。図形の定義を 2 箇所に
    持たないよう、`.ico` はコミットせず**同じ `paintAppIcon()` を呼ぶ
    `tools/make_app_icon.cpp` がビルド時に生成**し、`src/app/efs.rc.in` 経由で

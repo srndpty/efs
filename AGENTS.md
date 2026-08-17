@@ -281,9 +281,13 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
 
 ### Phase 4 で追加した不変条件
 
-- **閉じるボタンは終了ではない。** トレイが使えるなら設定を保存して隠すだけで、
-  終了はトレイメニューの `Quit` だけ。したがって**設定の保存経路は 2 本**ある
-  (`closeEvent` と `Quit`)。片方だけにすると、その経路で終わったときに設定が飛ぶ。
+- **閉じるボタンは終了ではない。** トレイが使えるなら `closeEvent` は
+  `saveSettings()` + `hide()` だけを行う。**意図的な終了処理の authority は
+  `MainWindow::quitApplication()` の 1 本** (`saveSettings()` →
+  `QApplication::quit()`) で、caller はトレイメニューの `Quit` と
+  `efs.exe --quit` の IPC の 2 つ。終了経路を増やすときも必ずここへ合流させる。
+  したがって**設定を保存するコード経路は `closeEvent` と `quitApplication()` の
+  2 本**あり、片方だけにすると、その経路で終わったときに設定が飛ぶ。
 - **「呼び出す手段が無いのに生きているプロセス」を作らない。**
   `setQuitOnLastWindowClosed(false)` の副作用なので、トレイが使えない環境では
   `closeEvent` から明示的に `QApplication::quit()` する。同じ理由で `--tray` は
@@ -311,19 +315,27 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   効かなくなる。メッセージ種別と ID の照合は必ず行う。
 - **`CreateMutexW` の NULL を Secondary 扱いしない。** 「既に起動している」と
   「判定そのものができなかった」は別の事象。後者 (`InstanceRole::Error`) は
-  理由を出して通常起動を続け、`--quit` は exit 1 にする。要求を送れなかった
-  Secondary も exit 1 — 送れていないのに成功として終わると `install.ps1` が
-  graceful に終わったと誤解して強制終了へ進む。
+  **fail-open にせず、短い modal で理由を出して exit 1 (起動しない)**。
+  single instance は常駐 / ホットキー / `--quit` の前提そのもので、判定できない
+  まま起動を許すと efs が複数常駐しうる。要求を送れなかった Secondary も
+  exit 1 — 送れていないのに成功として終わると `install.ps1` が graceful に
+  終わったと誤解して強制終了へ進む。
 - **外から終わらせる手段は `efs.exe --quit` だけ。** 閉じる = 隠す なので
   `WM_CLOSE` (`CloseMainWindow`) では終了しない。tray Quit と `--quit` は
   `MainWindow::quitApplication()` の 1 本に合流させ、必ず `saveSettings()` を
   通す。`install.ps1` はまず `--quit`、待ってから最後の手段としてだけ Kill。
 - **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等は invalid)。
   `Qt::SkipEmptyParts` で拾うと、打ち間違えた INI が正しい綴りと同じに解釈される。
+  **同じ修飾キーの重複** (`Ctrl+Ctrl+E` / `Ctrl+Control+E` / `Meta+Win+K`) も
+  同じ理由で invalid。1 つに畳まない。
 - **install は staging + backup で入れ替える。** 旧版を消してからコピーしない。
   ショートカット作成の失敗も含め、途中で失敗したら旧版を復元して非ゼロで
   終わること (partial install を成功物として残さない)。実行中プロセスの照合は
   `<Destination>\efs.exe` との**完全一致**で行う (前方一致は別物を巻き込む)。
+- **rollback の進捗フラグを 1 つにまとめない。** 「旧版を退避した」と「新版を
+  配置した」を別に持つ (`previousBackedUp` / `newPlaced`)。1 つにすると、
+  退避と配置の**間**で失敗したときに旧版を戻さないまま backup ごと消す経路が
+  でき、インストールが丸ごと消える。
 - **アイコンの図形は `paintAppIcon()` の 1 箇所だけ。** Explorer 用の
   `efs.ico` はリポジトリへコミットせず、同じ関数を呼ぶ `tools/make_app_icon.cpp`
   がビルド時に生成して `.rc` で埋め込む。**`.ico` を手で差し替えない** —

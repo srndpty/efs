@@ -151,13 +151,18 @@ if (-not (Test-Path $Source)) {
 try { Test-InstallContents $Source }
 catch { throw "$($_.Exception.Message)`npwsh scripts/package.ps1 をやり直すこと。" }
 
-# 入れ替えのどこまで進んだか。rollback の範囲を決めるのに使う。
-$swapped = $false
+# 入れ替えのどこまで進んだか。**1 つのフラグにまとめない** — 「旧版を退避した」と
+# 「新版を配置した」の間で失敗したときに、退避した旧版を戻さないまま backup ごと
+# 消してしまう (= インストールが丸ごと消える) ため。
+$hadPrevious = Test-Path $Destination
+$previousBackedUp = $false # 旧版を backup へ退避した
+$newPlaced = $false        # staging を配置先へ移した
 $shortcutsTouched = $false
 
 function Restore-Previous {
-    # 入れ替え済みなら、新しい方を捨てて旧版を戻す。
-    if ($script:swapped) {
+    if ($script:previousBackedUp) {
+        # 旧版を退避してある。配置先に残っているのは新版か移動途中の残骸なので
+        # 捨ててから戻す (**どの境界で失敗しても必ずここを通る**)。
         if (Test-Path $Destination) {
             Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
         }
@@ -165,6 +170,13 @@ function Restore-Previous {
             Write-Host "旧版を復元: $backup → $Destination"
             Move-Item $backup $Destination
         }
+    } elseif (-not $script:hadPrevious -and (Test-Path $Destination)) {
+        # 初回インストールの途中で失敗した。partial を成功物として残さない。
+        Write-Host "配置途中の $Destination を削除 (初回インストール)"
+        Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
+    }
+    if ($script:newPlaced) {
+        Write-Warning "配置済みの新版を取り消した。"
     }
     # ショートカットも触った分だけ戻す (元が無かったものは消す)。
     if ($script:shortcutsTouched) {
@@ -199,19 +211,23 @@ try {
     Copy-Item -Recurse -Force (Join-Path $Source '*') $staging
     Test-InstallContents $staging
 
-    # 2. 旧版を backup へ退避してから入れ替える (消してからコピーしない)。
+    # 2. 旧版を backup へ退避する (消してからコピーしない)。**退避した時点で
+    #    フラグを立てる** — 次の Move-Item が失敗しても旧版を戻せるように。
     if (Test-Path $Destination) {
         Write-Host "旧版を退避: $Destination → $backup"
         Move-Item $Destination $backup
+        $previousBackedUp = $true
     }
+
+    # 3. 新版を配置する。
     Move-Item $staging $Destination
-    $swapped = $true
+    $newPlaced = $true
     Write-Host "配置: $Destination"
 
-    # 3. 入れ替えた実体をもう一度検証する (移動が中途半端でないこと)。
+    # 4. 入れ替えた実体をもう一度検証する (移動が中途半端でないこと)。
     Test-InstallContents $Destination
 
-    # 4. ショートカット。ここで失敗しても rollback 対象にするため、既存の
+    # 5. ショートカット。ここで失敗しても rollback 対象にするため、既存の
     #    .lnk を先に退避しておく。
     New-Item -ItemType Directory -Force (Split-Path -Parent $startupLink) | Out-Null
     foreach ($link in @($startMenuLink, $startupLink)) {

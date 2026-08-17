@@ -100,6 +100,11 @@ HotkeySpec parseHotkey(const QString& text)
         bool isModifier = false;
         for (const auto& [flag, name] : kModifiers) {
             if (token.compare(QLatin1String(name), Qt::CaseInsensitive) == 0) {
+                // 同じ修飾キーを 2 度書いた指定 (`Ctrl+Ctrl+E` / `Ctrl+Control+E`)
+                // は打ち間違い。黙って 1 つに畳むと、壊れた INI が正しい綴りと
+                // 同じに解釈される (空の項を捨てないのと同じ理由)。
+                if ((spec.modifiers & flag) != 0)
+                    return {};
                 spec.modifiers |= flag;
                 isModifier = true;
                 break;
