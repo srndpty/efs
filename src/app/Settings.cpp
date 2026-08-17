@@ -19,6 +19,7 @@ constexpr auto kKindKey = "search/kind";
 constexpr auto kRegexKey = "search/regex";
 constexpr auto kSortKeyKey = "search/sortKey";
 constexpr auto kSortOrderKey = "search/sortOrder";
+constexpr auto kHotkeyKey = "hotkey/show";
 
 // 現行スキーマ。番号が違う INI は「読めない」とみなして全項目を既定値に戻す。
 // 汎用の migration framework は作らない (今のところ移行元が存在しない)。
@@ -132,6 +133,17 @@ Settings Settings::load()
     loaded.options.sortOrder =
         readEnum(settings, kSortOrderKey, kSortOrderNames, defaults.options.sortOrder);
 
+    // ホットキーは文字列のまま持つが、解釈できない綴りは既定へ戻す
+    // (壊れた INI で「ホットキーが黙って無効」になるのを避ける)。空文字は
+    // 「意図的に無効」なので尊重する。
+    if (settings.contains(QString::fromLatin1(kHotkeyKey))) {
+        const QString stored = settings.value(QString::fromLatin1(kHotkeyKey)).toString();
+        if (stored.trimmed().isEmpty())
+            loaded.hotkey.clear();
+        else
+            loaded.hotkey = parseHotkey(stored).isValid() ? stored : defaults.hotkey;
+    }
+
     loaded.windowGeometry = readByteArray(settings, kGeometryKey);
     loaded.windowState = readByteArray(settings, kWindowStateKey);
     loaded.headerState = readByteArray(settings, kHeaderStateKey);
@@ -150,6 +162,8 @@ void Settings::save() const
     settings.setValue(QString::fromLatin1(kSortKeyKey), nameOf(kSortKeyNames, options.sortKey));
     settings.setValue(QString::fromLatin1(kSortOrderKey),
                       nameOf(kSortOrderNames, options.sortOrder));
+
+    settings.setValue(QString::fromLatin1(kHotkeyKey), hotkey);
 
     settings.setValue(QString::fromLatin1(kGeometryKey), windowGeometry);
     settings.setValue(QString::fromLatin1(kWindowStateKey), windowState);

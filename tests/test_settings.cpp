@@ -31,6 +31,12 @@ private slots:
     void corruptedGeometryAndHeaderStateDoNotCrash();
     void enumsAreStoredAsStableStrings();
     void searchTextIsNotPersisted();
+
+    // --- Phase 4 -------------------------------------------------------------
+    void hotkeyDefaultsToCtrlAltE();
+    void hotkeyRoundTrip();
+    void emptyHotkeyMeansDisabled();
+    void corruptedHotkeyFallsBackToDefault();
 };
 
 Q_DECLARE_METATYPE(efs::ThemeMode)
@@ -254,11 +260,11 @@ void TestSettings::searchTextIsNotPersisted()
     QSettings settings;
     const QStringList keys = settings.allKeys();
     const QStringList expected{
-        QStringLiteral("settingsVersion"), QStringLiteral("appearance/theme"),
-        QStringLiteral("search/kind"),     QStringLiteral("search/regex"),
-        QStringLiteral("search/sortKey"),  QStringLiteral("search/sortOrder"),
-        QStringLiteral("window/geometry"), QStringLiteral("window/headerState"),
-        QStringLiteral("window/state"),
+        QStringLiteral("settingsVersion"),    QStringLiteral("appearance/theme"),
+        QStringLiteral("search/kind"),        QStringLiteral("search/regex"),
+        QStringLiteral("search/sortKey"),     QStringLiteral("search/sortOrder"),
+        QStringLiteral("hotkey/show"),        QStringLiteral("window/geometry"),
+        QStringLiteral("window/headerState"), QStringLiteral("window/state"),
     };
 
     QStringList sorted = keys;
@@ -276,6 +282,46 @@ void TestSettings::searchTextIsNotPersisted()
             !key.contains(QStringLiteral("recent"), Qt::CaseInsensitive),
             qPrintable(QStringLiteral("最近の query らしきキーが保存されている: %1").arg(key)));
     }
+}
+
+// --- Phase 4: グローバルホットキー --------------------------------------------
+
+void TestSettings::hotkeyDefaultsToCtrlAltE()
+{
+    QCOMPARE(efs::Settings::load().hotkey, QStringLiteral("Ctrl+Alt+E"));
+}
+
+void TestSettings::hotkeyRoundTrip()
+{
+    efs::Settings saved;
+    saved.hotkey = QStringLiteral("Ctrl+Shift+F9");
+    saved.save();
+    QCOMPARE(efs::Settings::load().hotkey, QStringLiteral("Ctrl+Shift+F9"));
+}
+
+// 空文字は「意図的に無効」。既定へ戻してはならない
+// (ホットキーを切ったのに毎回復活すると使い物にならない)。
+void TestSettings::emptyHotkeyMeansDisabled()
+{
+    efs::Settings saved;
+    saved.hotkey.clear();
+    saved.save();
+
+    const efs::Settings loaded = efs::Settings::load();
+    QVERIFY(loaded.hotkey.isEmpty());
+    QVERIFY(!efs::parseHotkey(loaded.hotkey).isValid());
+}
+
+// 解釈できない綴りは既定へ。黙って無効化すると「なぜか効かない」になる。
+void TestSettings::corruptedHotkeyFallsBackToDefault()
+{
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("settingsVersion"), 1);
+        settings.setValue(QStringLiteral("hotkey/show"), QStringLiteral("Hyper+Nonsense"));
+        settings.sync();
+    }
+    QCOMPARE(efs::Settings::load().hotkey, QStringLiteral("Ctrl+Alt+E"));
 }
 
 QTEST_GUILESS_MAIN(TestSettings)

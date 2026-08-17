@@ -394,7 +394,8 @@ struct Settings {
 
 - 設定ダイアログは MVP では作らない。UI で触れるのはテーマ切替 (ツールバー右端のトグル) のみ。それ以外は INI を直接編集。自分専用ツールなので設定 UI に工数を割かない。
 - `windowGeometry`/`headerState` は `QMainWindow::saveGeometry()` / `QHeaderView::saveState()` の QByteArray をそのまま保存 (自前でジオメトリを分解しない)。
-- 保存タイミングは `closeEvent` の1回のみ。
+- 保存タイミングは `closeEvent` の1回のみ (**Phase 4 で 2 本になった** — 閉じる =
+  隠す になったため、`closeEvent` と `quitApplication()` の両方で保存する)。
 
 ---
 
@@ -538,9 +539,145 @@ struct Settings {
    `viewport()->update()` だけにした。別キーのアイコン到着で解決済みキーを
    `QImage`→`QPixmap` 再変換しない。
 
-### Phase 4 — 将来 backend の受け皿 (MVP には不要・着手は任意)
+### Phase 4 — 常駐と配置 (Phase 3 完了後に追加で決めたスコープ)
+
+Phase 3 完了時点で日常利用を開始し、**実際に使ってみて欲しくなったものだけ**を
+取り出したフェーズ。当初 Phase 4 に置いていた「将来 backend の受け皿」は
+実利用の要求ではないので後ろ (Phase 5) へ回した — 順番の authority は
+「不満が実在するか」であって、当初の並びではない。
+
+やること:
+
+1. **タスクトレイ常駐** — `QSystemTrayIcon`。閉じるボタンは終了ではなく非表示。
+   終了は `MainWindow::quitApplication()` 1 本に集約し、caller はトレイメニューの
+   Quit と `efs.exe --quit` (P4 review で追加)。`closeEvent` は保存して隠すだけ。
+2. **グローバルホットキー** — `RegisterHotKey`。既定 `Ctrl+Alt+E`。
+   常駐の実質的な前提 (ホットキーが無いと常駐する意味が薄い)。
+3. **多重起動防止** — 常駐アプリなので必須。2 個目の起動は既存インスタンスを
+   前面に出して自分は終了する。
+4. **`Program Files` への配置** — 管理者用のコピースクリプト
+   (`scripts/install.ps1`)。**インストーラ (MSI/MSIX/NSIS/WiX) は作らない**、
+   コード署名もしない (個人用ツールであり、未署名の SmartScreen 警告を避けられる
+   方式を選んだ)。
+
+やらないこと (Phase 4 でも scope 外):
+インストーラ / コード署名 / 自動更新 / 検索履歴 / お気に入り / D&D /
+Everything の自動起動 / Everything 1.5 対応。
+
+確定事項:
+
+- **設定の保存先は `%APPDATA%\efs\efs.ini` のまま。** `Program Files` 配下は
+  非管理者から書けないが、efs はインストール先に書きに行かないので変更不要。
+  この性質を壊さないこと (設定を exe の隣へ置く「ポータブル版」は作らない)。
+- **Everything は引き続き別途常駐が必要。** efs は検索エンジンを持たない。
+  Everything 側の `show_tray_icon=0` にすればトレイに出るのは efs だけになる
+  (これは Everything の設定であり、efs のコードは関与しない)。
+- ホットキーは INI に `Ctrl+Alt+E` のような**文字列**で保存する
+  (int の生値にしない)。解釈は `app/HotkeySpec.*` の純粋関数に寄せ、
+  Win32 の `MOD_*` / VK への写像だけを `app/GlobalHotkey.cpp` に置く。
+- **登録に失敗しても起動を止めない。** 他アプリと衝突していることは普通に
+  起こる。非モーダルに理由を出し、アプリは通常どおり使えること。
+- スタートアップ登録はショートカットに `--tray` を渡す方式にし、
+  「起動時に隠す」ための設定項目は増やさない。
+
+**Phase 4 結果 (完了)**
+
+- 実装: `app/HotkeySpec.*` (INI 文字列 ⇄ 修飾キー+キーの純粋関数) /
+  `app/GlobalHotkey.*` (`RegisterHotKey` + native event filter) /
+  `app/SingleInstance.*` (名前付き mutex + `RegisterWindowMessageW`) /
+  `MainWindow` のトレイ常駐と `showAndActivate()` / `ToolbarIcons::appIcon()` /
+  `scripts/install.ps1`。
+- **ホットキーは HWND を持たせず `RegisterHotKey(nullptr, …)` で登録する。**
+  `WM_HOTKEY` はスレッドのメッセージキューへ届くので、ウィンドウが隠れていても
+  Qt の native event filter で拾える。ウィンドウの生成/破棄に左右されない。
+  `MOD_NOREPEAT` を必ず付ける (押しっぱなしで前面化を連打しない)。
+- **`showAndActivate()` が唯一の復帰経路。** ホットキー / トレイのクリック /
+  2 個目の起動 のすべてがここへ入る。最小化されている場合は `showNormal()` では
+  なく最小化ビットだけを落とす (最大化状態を潰さないため)。
+- **多重起動防止に Qt Network は使わない。** 名前付き mutex (`Local\` 名前空間 =
+  セッション単位) と `RegisterWindowMessageW` のブロードキャストで足りる。
+  `QLocalServer` のためだけに Qt のモジュールを増やさない。
+- **設定を保存するコード経路が 2 本になった。** 閉じる = 終了ではなくなったので、
+  `closeEvent` (隠す前) と `MainWindow::quitApplication()` の両方から
+  `saveSettings()` を呼ぶ。`quitApplication()` の caller はトレイの Quit と
+  `--quit` IPC の 2 つで、終了処理そのものはこの 1 本だけ。
+  片方だけにすると、その経路で終わったときだけ設定が飛ぶ。
+**P4 review で追加した修正**
+
+1. **native event の種別を決め打たない。** `windows_generic_MSG` だけを見て
+   いたが、Qt が system-wide message を `windows_dispatcher_MSG` で渡す経路も
+   あるため両方受ける。実測 (Qt 6.8.3) では `WM_HOTKEY` は
+   `windows_generic_MSG` で届いた。ID の照合は維持。
+2. **`efs.exe --quit`。** 閉じる = 隠す にした結果、`CloseMainWindow` では
+   終了しなくなり、`install.ps1` の「行儀よく閉じる → 駄目なら Kill」が
+   **通常経路で必ず Kill** になっていた (= 設定が保存されない)。既存の
+   SingleInstance IPC を wParam 1 つ分だけ拡張して `--quit` を足し、tray の
+   Quit と同じ `MainWindow::quitApplication()` へ合流させた。
+3. **install.ps1 を実際に fail-closed にした。** 「旧版を消してからコピー」を
+   staging + backup + 失敗時 rollback へ変更。ショートカット作成の失敗も
+   rollback 対象 (既存 `.lnk` は先に退避)。実行中プロセスの照合は前方一致から
+   `<Destination>\efs.exe` との完全一致へ。
+4. **`CreateMutexW` の 3 状態を区別。** NULL を Secondary 扱いして exit 0 して
+   いたのをやめ、`InstanceRole::{Primary,Secondary,Error}` にした。
+   `RegisterWindowMessageW` の失敗も同じ infrastructure error として扱う。
+5. **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等を invalid に)。
+   `Qt::SkipEmptyParts` をやめ、table-driven の回帰テストを追加した。
+6. **rollback の状態を 2 つに分けた (final review)。** 「旧版を退避した」と
+   「新版を配置した」を 1 つのフラグで持っていたため、**その 2 つの間で失敗すると
+   旧版を戻さないまま backup を消す** (= インストールが丸ごと消える) 経路が
+   あった。`previousBackedUp` / `newPlaced` に分け、初回インストールで途中失敗
+   した場合は partial な配置先を削除する。3 箇所へ fault injection を入れて実測
+   した (injection 自体は残していない)。
+7. **`InstanceRole::Error` を fail-open にしない (final review)。** 通常起動も
+   短い modal を出して exit 1 にした。single instance は常駐 / ホットキー /
+   `--quit` の前提そのもので、判定できないまま起動を許すと efs が複数常駐しうる。
+8. **同じ修飾キーの重複を invalid にした (final review)。**
+   `Ctrl+Ctrl+E` / `Ctrl+Control+E` / `Meta+Win+K` を 1 つに畳まない。
+9. **ショートカットの復元を型まで保証した (final cleanup)。** 退避対象は `.lnk`
+   ファイル (Leaf) だけと明示し、復元は「型を問わず取り除く → コピー → Leaf で
+   あることを確認」に変えた。`Copy-Item -Force` の上書きに頼ると、復元先が
+   ディレクトリのときに中へコピーされて `.lnk` が戻らない。
+10. **exe のアイコン (Explorer 表示)。** シェルが出すアイコンは PE リソース
+   なので、実行時に `QPainter` で描く方式では出せない。図形の定義を 2 箇所に
+   持たないよう、`.ico` はコミットせず**同じ `paintAppIcon()` を呼ぶ
+   `tools/make_app_icon.cpp` がビルド時に生成**し、`src/app/efs.rc.in` 経由で
+   埋め込む。ICO の書き出しは手書き (Qt の ICO ハンドラは 1 画像しか書けず、
+   複数サイズを 1 ファイルに収められない)。
+
+- deviation (計画との差分):
+  1. `QApplication::setQuitOnLastWindowClosed(false)` を入れた副作用として、
+     **トレイが使えない環境では閉じてもプロセスが残る**。`closeEvent` の
+     非トレイ経路で明示的に `QApplication::quit()` を呼んで塞いだ。同じ理由で
+     `--tray` はトレイが使えるときだけ隠して起動する (`MainWindow::hasTrayIcon()`)。
+     トレイ不在は実機では起きていないが、「呼び出す手段が無いのに生きている
+     プロセス」は自力で復帰できないので防御した。
+  2. ホットキーを変更する UI は作っていない。INI (`hotkey/show`) の直編集のみ。
+     設定ダイアログを作らない方針は Phase 3 から変えていない。
+  3. `install.ps1` は「管理者かどうか」ではなく**実際に書けるか**で事前確認する。
+     `-Destination` にユーザー書き込み可能な場所を指せば昇格なしでスクリプト自体を
+     検証できる。ショートカット 2 つ (スタートメニュー / スタートアップ) は
+     ユーザープロファイル配下なので昇格が要るのは Program Files へのコピーだけ。
+
+### Phase 5 — 将来 backend の受け皿 (着手は任意)
 `BackendFactory` に `NativeNtfsBackend` の空実装を追加 (`isAvailable()` は false を返す) / backend 共通の適合テストスイート (両実装が同じテストを通ることを保証) / INI の隠し設定で backend 選択。
-**MFT/USN の実装そのものはここでは行わない。** MVP を日常利用して不満が残った時点で初めて着手する。
+**MFT/USN の実装そのものはここでは行わない。** Everything を日常利用して「Everything 自体に不満が残る」と分かった時点で初めて着手する。現時点でその不満は出ていないので、**このフェーズは着手条件を満たしていない。**
+
+### Phase 6 — 実利用で不満が出たときだけ着手する候補 (未確定)
+
+日常利用しながら溜める置き場。**ここに書いてあることは「やる」ではなく
+「不満として実在したらやる」。** 先回りして実装しない (Phase 4 が実際に
+そうやって選ばれた)。着手するときは 1 フェーズ 1 テーマに切り出す。
+
+| 候補 | 着手条件 |
+|---|---|
+| 検索履歴 (直近のクエリを ↑↓ で戻す) | 同じクエリを打ち直す回数が実際に鬱陶しくなったら。永続化するか (= 検索文字列を INI に書くか) はそのときに決める — Phase 3 の「検索文字列を永続化しない」を覆す判断になる |
+| `matchPath` / `matchCase` のトグル | パス照合が欲しい場面が実際に出たら。**設定ダイアログは作らず**ツールバーのトグルとして足す |
+| 種別フィルタの拡張子リストの編集 | ハードコードした一覧で困ったら。INI 化はそのとき初めて検討する |
+| 結果のプレビュー / 複数タブ / D&D | 現状スコープ外。要求が出るまで検討もしない |
+| Everything 1.5 対応 | 1.5 が stable になり、かつ 1.4 で困ってから |
+
+恒久的にやらないもの (候補にも入れない): インストーラ / コード署名 / 自動更新 /
+i18n 機構 / DI フレームワーク / プラグイン機構。
 
 ---
 

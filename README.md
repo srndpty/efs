@@ -3,10 +3,11 @@
 Everything を検索エンジンとして使う Windows 向けファイル検索 UI。
 アプリの UI 表示は英語。x64 のみ。
 
-現在の状態: **Phase 3 完了** — MVP (種別フィルタ、Regex トグル、backend ソート、
+現在の状態: **Phase 4 完了** — MVP (種別フィルタ、Regex トグル、backend ソート、
 右クリックメニュー) に加えて、設定の永続化、テーマ切替 (System / Dark / Light)、
 backend error の非モーダル表示、Regex の構文警告、結果行のファイル種別アイコン、
-`windeployqt` による配布ディレクトリ生成まで動く。
+`windeployqt` による配布ディレクトリ生成、さらにタスクトレイ常駐 /
+グローバルホットキー / 多重起動防止 / `Program Files` への配置スクリプトまで動く。
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 この README には実測で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
@@ -56,13 +57,34 @@ Visual Studio ジェネレータはマルチ構成のため、configure プリ�
 clang-tidy は `compile_commands.json` を要求するので、lint だけは Ninja
 プリセット (`ninja-x64-debug`) を使う。これは Developer PowerShell が必要。
 
+### ビルドの並列化
+
+MSBuild は既定で **ターゲット内も、ターゲット間も直列**に走る。放っておくと
+32 論理コアの機械で CPU 使用率が 3〜7% しか出ず、フルリビルドに 95 秒かかっていた。
+効かせる軸は 2 つあり、**両方入れて初めて速くなる**。
+
+| 軸 | 手段 | 効果 (フルリビルド) |
+|---|---|---|
+| ターゲット内のファイル | `/MP` (top-level の `add_compile_options`) | 95 s → 38 s |
+| ターゲット間 | build プリセットの `"jobs": 0` (= `--parallel`、MSBuild の `/m`) | 38 s → **9 s** |
+
+`jobs: 0` は「ビルドツールの既定 = コア数」を意味する。台数固定の数値を書くと
+別の機械や CI で過不足が出るので数値は置かない。プリセット経由で叩く限り
+追加のフラグは要らない (素の `cmake --build <dir>` を使うときだけ `--parallel` を
+自分で付ける)。
+
+**`/MP` は Visual Studio ジェネレータのときだけ付ける。** Ninja は元から
+ファイル単位で並列に走るので二重になるうえ、`/MP` が `compile_commands.json` に
+入ると clang-tidy が余計な引数を見ることになる。
+
 ## ターゲット
 
 | ターゲット | 用途 |
 |---|---|
 | `efs_core` | 静的ライブラリ。Qt Widgets に依存しないものすべて (core / backend / 検索スレッド / テーブルモデル) |
 | `efs` | WIN32 GUI 実行ファイル。`MainWindow` と `main()` だけを持つ |
-| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_settings` / `test_regex_validation` / `test_icon_cache` / `test_everything_api` / `test_everything_backend`) |
+| `efs_icongen` | ビルド時に `efs.ico` を生成するだけのツール (下の「アプリアイコン」)。出荷物ではない |
+| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_settings` / `test_regex_validation` / `test_icon_cache` / `test_hotkey_spec` / `test_everything_api` / `test_everything_backend`) |
 
 QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けないため、テストは
 ファイル単位でターゲットを分けている。共通設定は `tests/CMakeLists.txt` の
@@ -73,11 +95,12 @@ QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けな�
 | 目的 | 手段 |
 |---|---|
 | 整形 | `.clang-format` (LLVM ベース、100 桁、4 スペース、関数のみ開き括弧を次行) |
-| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定)。実行は `pwsh scripts/lint.ps1` — CI も同じスクリプトを呼ぶ |
+| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定)。実行は `pwsh scripts/lint.ps1` — CI も同じスクリプトを呼ぶ。**既定の clang-tidy は CI と同じ 22.1 系** (`-Bootstrap` で `.tidy22` に用意。版が違えば警告が出る) |
 | テスト | QtTest + `ctest` |
 | カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
 | pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
 | 配布 | `pwsh scripts/package.ps1` — Release ビルド + `windeployqt` + `Everything64.dll` |
+| インストール | `pwsh scripts/install.ps1` — `dist\efs` を `Program Files` へ配置 + ショートカット (管理者権限が要る) |
 | CI | `.github/workflows/ci.yml` — format / build & test (Debug・Release) / lint / coverage / package |
 
 CI 上には Everything が存在しないため、IPC を伴うテストは `QSKIP` される。
@@ -203,7 +226,213 @@ Name 列に Windows のファイル種別アイコンを出す。
 
 `Ctrl+L` / `Ctrl+F` で検索欄へフォーカス + 全選択。`Esc` は検索文字列が
 入っていれば消す (空なら何もしない)。**`Esc` でアプリは終了しない。**
-グローバルホットキーは実装しない。
+アプリ外から呼び出すグローバルホットキーは Phase 4 で追加した (下記)。
+
+## 動作 (Phase 4)
+
+### タスクトレイ常駐
+
+閉じるボタンは**終了ではなく非表示**。意図的な終了処理は
+`MainWindow::quitApplication()` (`saveSettings()` → `QApplication::quit()`) の
+1 本だけで、呼ぶのは**トレイメニューの `Quit` と `efs.exe --quit` の IPC の 2 つ**。
+`closeEvent` は `saveSettings()` + `hide()` で、終了はしない。
+したがって**設定を保存するコード経路は `closeEvent` と `quitApplication()` の 2 本**。
+トレイアイコンのクリック / ダブルクリック、メニューの `Show efs`、
+グローバルホットキー、2 個目の起動 — 復帰経路はすべて
+`MainWindow::showAndActivate()` の 1 本に入る。最小化されていた場合は
+`showNormal()` ではなく最小化ビットだけを落とす (最大化していた状態を潰さない)。
+復帰したら検索欄にフォーカスして全選択するので、そのまま打ち始められる。
+
+閉じる = 終了でなくなったため、**設定を保存するコード経路は 2 本**ある —
+隠す前の `closeEvent` と、意図的な終了の `quitApplication()`
+(caller はトレイの `Quit` と `--quit` IPC)。片方だけにすると、その経路で
+終わったときに設定が飛ぶ。
+
+トレイが使えない環境 (`QSystemTrayIcon::isSystemTrayAvailable()` が false) では
+従来どおり閉じる = 終了。`QApplication::setQuitOnLastWindowClosed(false)` に
+しているので、この経路では `closeEvent` から明示的に `quit()` する — でないと
+「ウィンドウもトレイも無いのにプロセスだけ残る」状態になり、自力で戻せない。
+同じ理由で `--tray` はトレイが使えるときだけ隠して起動する。
+
+### グローバルホットキー
+
+既定 `Ctrl+Alt+E`。INI の `hotkey/show` に `Ctrl+Alt+E` のような**文字列**で
+持つ (int の生値にしない)。変更する UI は作っていない — INI を直接編集する。
+
+- 解釈は `app/HotkeySpec.*` の純粋関数。Win32 の `MOD_*` / 仮想キーへの写像は
+  `app/GlobalHotkey.cpp` の 1 箇所だけ。この分離で表記のテストが GUI 無しで書ける。
+- 受け付けるキーは `A-Z` / `0-9` / `F1-F24` / `Space`。修飾キーの綴りは
+  大文字小文字を問わず `Ctrl` (`Control`) / `Alt` / `Shift` / `Meta` (`Win`)。
+  出力は常に `Ctrl+Alt+Shift+Meta+<key>` の順に正規化する。
+- **空の項は読み飛ばさず invalid にする** (`Ctrl++Alt+E` / `+Ctrl+Alt+E` /
+  `Ctrl+Alt++E` / `Ctrl+ +E`)。読み飛ばすと打ち間違えた INI が正しい綴りと
+  同じに解釈され、「壊れているのに黙って動く」ことになる。
+  **同じ修飾キーの重複も同じ理由で invalid** (`Ctrl+Ctrl+E` / `Ctrl+Control+E` /
+  `Meta+Win+K`)。1 つに畳まない。
+- **修飾キー無しは拒否する** (OS 全体でそのキーを 1 つ奪ってしまう)。
+  空文字は「意図的に無効」として尊重し、解釈できない綴りは既定へ戻す
+  (壊れた INI で黙って無効になると「なぜか効かない」になるため)。
+- 登録は `RegisterHotKey(nullptr, …)`。**HWND を持たせない** — `WM_HOTKEY` は
+  スレッドのメッセージキューへ届くので、ウィンドウが隠れていても・作り直されても
+  Qt の native event filter で拾える。`MOD_NOREPEAT` を付けて、押しっぱなしで
+  前面化を連打しないようにする。
+- native event filter は **`windows_generic_MSG` と `windows_dispatcher_MSG` の
+  両方**を受ける。実測 (Qt 6.8.3 / Windows 11) では `WM_HOTKEY` は
+  **`windows_generic_MSG`** で届いたが、どちらで渡すかは Qt の内部実装次第なので
+  片方に決め打たない (決め打つと Qt の版が変わった途端にホットキーが黙って
+  効かなくなる)。`WM_HOTKEY` + ホットキー ID の照合はそのまま維持する。
+- **登録に失敗しても起動を止めない。** 他アプリとの衝突は普通に起こるので、
+  検索欄の下に `Global hotkey Ctrl+Alt+E is unavailable (already in use by
+  another application).` と 1 行出すだけ (modal は出さない)。backend error と
+  Regex 警告の方が「今の操作」に近いので、表示の優先度はこれが最も低い。
+
+### アプリアイコン
+
+ウィンドウ / タスクトレイ / タスクバーの表示は実行時に `QPainter` で描く
+(`app/ToolbarIcons.cpp` の `paintAppIcon()`)。一方 **Explorer が出すアイコンは
+PE のリソース**なので、実行時に描く方式では出せず、ビルド時に `.ico` の実体が要る。
+
+図形の定義を 2 箇所に持たないよう、`.ico` はリポジトリへコミットせず
+**同じ `paintAppIcon()` を呼ぶ生成ツール (`tools/make_app_icon.cpp`) が
+ビルド時に作る**。CMake が `src/app/efs.rc.in` を configure し、生成した
+`efs.ico` を `1 ICON` として exe へ埋め込む。
+
+- 収録サイズは 16 / 32 / 48 / 256。16〜48 は DIB、256 は PNG で持つ
+  (256 を DIB にすると数百 KB になる)。
+- ICO の書き出しは手書き。**Qt の ICO ハンドラは 1 画像しか書けず**、複数サイズを
+  1 ファイルへ収められない。
+- ツールは `QPixmap` を作らないので `QGuiApplication` を必要としない
+  (`QImage` + `QPainter` だけ)。
+- 実測: 生成された `efs.ico` は 4 フレーム (16/32/48/256) を持ち、シェルが
+  exe から解決するアイコン (`SHGetFileInfoW`) が実際にこの図形になることを確認した。
+  なお .NET の `System.Drawing.Icon` は 256px の PNG フレームを読まない
+  (GDI+ の制限) ので、確認には WPF の `IconBitmapDecoder` を使った。
+
+### 多重起動と既存インスタンスへの要求
+
+名前付き mutex (`Local\` 名前空間 = ログオンセッション単位) で 2 個目を検出し、
+`RegisterWindowMessageW` で得たメッセージ ID を `HWND_BROADCAST` へ投げてから
+自分は終了する。既存インスタンスは native event filter でそれを受ける
+(常駐中はウィンドウが隠れているのでブロードキャストが要る)。
+**この 1 経路のために Qt Network (`QLocalServer`) は入れない。**
+
+要求は 1 つのメッセージの `wParam` で区別する (メッセージを 2 つ登録しても
+失敗点が増えるだけ)。知らない要求コードは消費するだけで、Show や Quit へ
+勝手に倒さない。
+
+| 起動 | 既存インスタンスが居る | 居ない |
+|---|---|---|
+| `efs.exe` | 前面に出して自分は exit 0 | 通常起動 |
+| `efs.exe --quit` | 設定を保存して終了させ、自分は exit 0 | 何もせず exit 0 (**UI は出さない**) |
+
+`--quit` は `install.ps1` が更新前に使う graceful exit。**閉じる = 隠すになった
+以上、`WM_CLOSE` (`CloseMainWindow`) では終了しない**ので、外から行儀よく
+終わらせる手段がこれしかない。tray の Quit と同じ `MainWindow::quitApplication()`
+(= `saveSettings()` → `quit()`) に合流させてあり、終了経路は 1 本だけ。
+
+`CreateMutexW` の結果は 3 通りを区別する。
+
+| 結果 | 立場 | 動作 |
+|---|---|---|
+| 非 NULL + `!ERROR_ALREADY_EXISTS` | Primary | 通常起動。`--quit` は exit 0 |
+| 非 NULL + `ERROR_ALREADY_EXISTS` | Secondary | 要求を投げて exit 0。**投げられなければ exit 1** |
+| NULL | Error | 理由を modal で 1 つ出して **exit 1 (起動しない)** |
+
+**`NULL` を Secondary 扱いして exit 0 しない。** 「既に起動している」と「判定
+そのものができなかった」は別の事象で、後者を成功終了させると、起動したはずの
+アプリが理由も無く消えたように見える。`RegisterWindowMessageW` の失敗も同じ
+infrastructure error として扱う (mutex は握ったままにする — 手放すと今度は
+多重起動まで許してしまう)。送れていないのに成功として終わらないのは
+`install.ps1` のためでもある (graceful に終わったと誤解して強制終了へ進む)。
+
+**Error では fail-open しない (起動を続けない)。** single instance は Phase 4 の
+前提そのもので、トレイ常駐・グローバルホットキー・`--quit` はどれも「efs は
+1 つ」が成り立って初めて意味を持つ。判定できないまま起動を許すと、ホットキーの
+奪い合いや設定の上書き合いが起きる。コンソールを持たない GUI アプリなので、
+理由は短い modal (`efs cannot start: …`) で出してから終わる。
+
+### インストール
+
+```powershell
+pwsh scripts/package.ps1                      # → dist\efs\
+pwsh scripts/install.ps1                      # 管理者 PowerShell で実行
+pwsh scripts/install.ps1 -NoStartup           # ログオン時の自動起動なし
+pwsh scripts/install.ps1 -Uninstall
+```
+
+`dist\efs` を `%ProgramFiles%\efs` へコピーし、スタートメニューと (既定では)
+スタートアップにショートカットを作る。スタートアップのショートカットだけは
+`--tray` を渡し、ログオン時にウィンドウを出さずトレイに常駐させる
+(「起動時に隠す」ための設定項目は増やさない)。
+
+- **インストーラ (MSI / MSIX / NSIS / WiX) は作らない。コード署名もしない。**
+  個人用ツールであり、未署名インストーラの SmartScreen 警告を避けられる
+  この方式で足りる。
+- **fail-closed。旧版を消してから上書きしない。** 手順は
+  ① staging (`<Destination>.staging-<pid>`) へコピーして必須ファイルを検証
+  → ② 旧版を `<Destination>.backup-<pid>` へ退避 → ③ staging を配置先へ move
+  → ④ 配置後にもう一度検証 → ⑤ ショートカット作成 → ⑥ 成功して初めて backup を
+  捨てる。②以降のどこで失敗しても**旧版を復元**し、非ゼロで終わる。
+  **ショートカット作成の失敗も rollback 対象**で、既存の `.lnk` は先に退避して
+  おき、元が無かったものは消して戻す。staging と backup は配置先と同じ親に置く
+  (別ボリュームだと move がコピーになり、入れ替えの性質が変わる)。
+- **ショートカットとして扱うのは `.lnk` ファイル (Leaf) だけ。** その path に
+  ディレクトリ等が居座っている場合は「正常な既存ショートカット」とみなさず
+  退避もしない (戻すべき中身が無い)。復元は**型を問わず取り除いてからコピー**し、
+  最後に Leaf であることを確かめる — `Copy-Item` の上書きに頼ると、相手が
+  ディレクトリのときに「その中へコピー」になって `.lnk` が復元されない。
+- **進捗のフラグを 1 つにまとめない。** 「旧版を退避した」(`previousBackedUp`) と
+  「新版を配置した」(`newPlaced`) は別に持つ。1 つにすると、②と③の**間**で
+  失敗したときに「旧版を戻さないまま backup ごと消す」= インストールが丸ごと
+  消える経路ができる (fault injection で実測して塞いだ)。初回インストールで
+  ③以降に失敗した場合は、旧版が無いので配置途中の中身を削除して終わる。
+- 事前確認は「管理者かどうか」ではなく**実際に書けるか**。`-Destination` に
+  ユーザー書き込み可能な場所を指せば、昇格なしでスクリプト自体を検証できる。
+  ショートカット 2 つはユーザープロファイル配下なので、昇格が要るのは
+  `Program Files` へのコピーだけ。
+- **設定は `%APPDATA%\efs\efs.ini` のまま。インストール先には何も書かない。**
+  だから非管理者でも普通に使えるし、アンインストールしても設定は残る。
+  設定を exe の隣に置く「ポータブル版」は作らない。
+- 常駐しているのが普通なので、上書きの前に **`efs.exe --quit` で graceful に
+  終わってもらう** (10 秒待って駄目なときだけ強制終了し、その旨を warning に
+  出す)。`CloseMainWindow()` は Phase 4 では「隠す」でしかなく終了しないので、
+  そこへ頼ると**通常経路が毎回強制終了**になり、設定の保存を飛ばしてしまう。
+- 実行中プロセスの照合は **`<Destination>\efs.exe` との完全一致** (正規化した
+  フルパスで比較)。前方一致にすると `C:\Program Files\efs-old\efs.exe` のような
+  別物まで巻き込んで止めてしまう。
+
+Everything 本体は引き続き別途常駐が必要。Everything のトレイアイコンを消したい
+場合は Everything 側の `show_tray_icon=0` にする (efs のコードは関与しない)。
+
+### Phase 4 の実機確認
+
+Debug ビルドで確認した (GUI の自動テストは書かない方針なので、ここは手動)。
+
+| 確認 | 結果 |
+|---|---|
+| 2 個目の起動 | 即座に終了コード 0 で終わり、プロセスは 1 つのまま |
+| 2 個目の起動 → 既存インスタンス | 隠れていたウィンドウが前面に戻る |
+| `--tray` 起動直後に 2 個目を 5 連射 | 5 回とも exit 0・プロセスは 1 つ・ウィンドウが出る (**activation を取りこぼさない**)。隠す→起動を 5 往復しても同じ |
+| 閉じるボタン | プロセスは生き続け、`%APPDATA%\efs\efs.ini` が更新される (`hotkey/show=Ctrl+Alt+E` を含む) |
+| `Ctrl+Alt+E` (ウィンドウを隠した状態) | ウィンドウが戻る。`WM_HOTKEY` の eventType は `windows_generic_MSG` |
+| `efs.exe --tray` | ウィンドウを出さずに常駐し、`Ctrl+Alt+E` で出せる |
+| tray メニューの Quit | 正常終了する (ユーザー確認) |
+| exe のアイコン | シェルが exe から引くアイコンが efs のもの (青い丸 + 虫めがね) になる。`.ico` は 16/32/48/256 の 4 フレーム |
+| `efs.exe --quit` (常駐中) | exit 0、既存インスタンスが INI を更新してから終了 |
+| `efs.exe --quit` (未起動) | exit 0。**UI は出さず**プロセスも残らない |
+| 実行中の efs を更新 (`install.ps1`) | `--quit` で graceful に終わり、強制終了の warning は出ない。入れ替え後に作業ディレクトリは残らない |
+| ショートカット作成を失敗させる (`efs.lnk` の場所をディレクトリにする) | 旧版が復元され (退避した中身がそのまま戻る)、非ゼロで終わる。退避した `.lnk` も戻る |
+| 同上で、別の配置先への初回インストール中に Startup 側を失敗させる | 退避した `.lnk` が **Leaf として**復元され、リンク先も元のまま。ディレクトリは除去、配置途中の新しい配置先は削除、exit 1 |
+| fault injection: 旧版を退避した直後・新版を配置する前に失敗 | 旧版が復元される (marker 込み)、exit 1、作業ディレクトリ残らず |
+| fault injection: 新版を配置した直後に失敗 (旧版あり) | 新版を捨てて旧版を復元、exit 1 |
+| fault injection: 新版を配置した直後に失敗 (初回 = 旧版なし) | 配置途中の中身を削除して exit 1 (**partial を残さない**) |
+| 不完全な `-Source` | 配置先に触れる前に失敗。旧版は無傷 |
+| 配置先と前方一致する別ディレクトリ (`...-other\efs.exe`) から起動中 | `install.ps1` はそれを止めない (完全一致で照合) |
+| `install.ps1 -Uninstall` | 配置先とショートカットが消え、INI は残る |
+
+tray メニューの Quit は通知領域のクリックが要るため自動化しておらず、
+ユーザーが手動で確認した。実体は `--quit` と同じ
+`MainWindow::quitApplication()` の 1 本。
 
 ## 配布
 

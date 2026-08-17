@@ -37,6 +37,7 @@ efs_add_test(test_search_controller)
 efs_add_test(test_settings)
 efs_add_test(test_regex_validation)
 efs_add_test(test_icon_cache)
+efs_add_test(test_hotkey_spec)
 efs_add_test(test_everything_backend)
 
 # SDK のエラーコード定数を期待値として使うテストだけ、明示的に SDK の include

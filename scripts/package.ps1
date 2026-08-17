@@ -117,7 +117,9 @@ if (-not (Test-Path (Join-Path $BuildDir 'CMakeCache.txt'))) {
 }
 
 Write-Host "Release ビルド: $BuildDir ($Config)"
-& cmake --build $BuildDir --config $Config --target efs
+# --parallel はプリセット非経由なので自分で付ける (build プリセットの
+# "jobs": 0 はここには効かない)。値を書かない = ビルドツールの既定 = コア数。
+& cmake --build $BuildDir --config $Config --target efs --parallel
 if ($LASTEXITCODE -ne 0) { throw "Release ビルドが終了コード $LASTEXITCODE で失敗した。" }
 
 # 出力先はジェネレータで変わる (Ninja は build ルート、Visual Studio は

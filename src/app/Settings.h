@@ -10,10 +10,12 @@
 // 未知の値・壊れた値はすべて既定値へ戻す。
 #pragma once
 
+#include "app/HotkeySpec.h"
 #include "app/Theme.h"
 #include "core/SearchTypes.h"
 
 #include <QByteArray>
+#include <QString>
 
 namespace efs {
 
@@ -21,6 +23,10 @@ struct Settings {
     // 初回既定。Dark はこのアプリを作った理由の 1 つなので変えない。
     ThemeMode theme = ThemeMode::Dark;
     SearchOptions options; // All / Regex OFF / Name 昇順
+
+    // グローバルホットキー (Phase 4)。"Ctrl+Alt+E" のような文字列で持つ。
+    // 空 = 無効。解釈は app/HotkeySpec.* が行う。
+    QString hotkey = defaultHotkeyText();
 
     // Qt の saveGeometry / saveState / QHeaderView::saveState をそのまま持つ。
     // 自前でジオメトリを分解して画面外補正する機構は作らない

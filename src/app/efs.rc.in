@@ -1,0 +1,9 @@
+// exe に埋め込むリソース (Phase 4)。CMake が build ディレクトリへ configure し、
+// tools/make_app_icon.cpp がビルド時に生成した efs.ico を指す。
+//
+// **アイコンの図形はここには無い。** 定義は app/ToolbarIcons.cpp の
+// paintAppIcon() 1 箇所だけで、.ico はそこから生成される。
+//
+// ID 1 = Explorer / タスクバーが使う既定のアプリケーションアイコン
+// (シェルは最も小さい ID のアイコンを選ぶ)。
+1 ICON "@EFS_APP_ICON@"

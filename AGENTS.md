@@ -73,6 +73,7 @@ src/app/                  UI と検索の駆動。Widgets に依存するのは 
 tests/                    QtTest。ctest に登録
 docs/                     implementation-plan.md (計画の authority)
 scripts/                  補助スクリプト
+tools/                    ビルド時に走らせるだけの道具 (出荷物ではない)
 third_party/              ベンダリングした Everything SDK。整形・lint の対象外
 ```
 
@@ -97,6 +98,7 @@ pre-commit run --all-files
 # lint (Developer PowerShell が必要。compile_commands.json を使う)
 cmake --preset ninja-x64-debug
 cmake --build --preset ninja-x64-debug
+pwsh scripts/lint.ps1 -Bootstrap   # 初回のみ: CI と同じ 22.1 系を .tidy22 に用意
 pwsh scripts/lint.ps1
 
 # カバレッジ (要 OpenCppCoverage)
@@ -115,19 +117,48 @@ pwsh scripts/package.ps1
   Qt のヘッダを解析するとアクセス違反 (0xC0000005) で落ちる。
   `VC\Tools\Llvm\x64\bin` を使うこと (`scripts/lint.ps1` がそうしている)。
 - **ローカルと CI で clang-tidy のバージョンが違う。** ローカルは VS 2022 同梱の
-  19.1.5、CI ランナーはより新しい VS 同梱版。新しい方でだけ有効な check があり、
-  **ローカルが緑でも CI が落ちることがある**。実例: `modernize-use-integer-sign-comparison`
-  は clang-tidy 20 で追加されたため 19.1.5 では検出されず、CI だけが失敗した。
-  `WarningsAsErrors: '*'` なので新しい check は即エラーになる。CI が lint で
-  落ちたら `pwsh scripts/lint.ps1 -ClangTidy <新しい clang-tidy のパス>` で手元に
-  再現させる。スクリプトはバージョンを表示するので CI ログと突き合わせられる。
-  新しい版が手元に無ければ venv に入れるのが手軽 (システムを汚さない):
+  19.1.5、CI ランナーはより新しい VS 同梱版 (2026-08 時点で **VS 18 の 22.1.3**)。
+  新しい方でだけ有効な check があり、**ローカルが緑でも CI が落ちることがある**。
+  実例 1: `modernize-use-integer-sign-comparison` は clang-tidy 20 で追加されたため
+  19.1.5 では検出されず、CI だけが失敗した。
+  実例 2: `modernize-avoid-c-style-cast` (22 で有効) は **`quint32(0)` のような
+  関数形式のキャストも C-style cast として弾く**。`QDataStream` へ数値を流すときは
+  `static_cast<T>(...)` か**型付きの定数**を使うこと (`tools/make_app_icon.cpp`
+  がそうしている)。同時に `performance-unnecessary-copy-initialization` も
+  19.1.5 より広く効く (`const QString x = list.at(i);` → 参照にする)。
+  `WarningsAsErrors: '*'` なので新しい check は即エラーになる。
+  **そこで `lint.ps1` の既定を CI と同じ 22.1 系にしてある。** リポジトリ直下の
+  `.tidy22` (venv。`.gitignore` の `.tidy*/` で無視される) を最優先で探し、
+  無ければ `-Bootstrap` で用意できる。CI ランナーには venv が無いので同梱版へ
+  フォールバックする。見つかった版が 22.1 系でなければ**警告を出してから実行する**
+  (止めはしない — 手元に古い版しか無くても lint 自体はできる方がよい)。
 
   ```powershell
-  python -m venv .tidy20
-  .tidy20\Scripts\pip install clang-tidy==20.1.0
-  pwsh scripts/lint.ps1 -ClangTidy .tidy20\Scripts\clang-tidy.exe
+  pwsh scripts/lint.ps1 -Bootstrap          # .tidy22 に clang-tidy 22.1.8 を入れる
+  pwsh scripts/lint.ps1                     # 以後は既定でそれが使われる
+  pwsh scripts/lint.ps1 -ClangTidy <path>   # 別の版を試すとき
   ```
+
+  期待バージョン (`$expectedVersion`) と `-Bootstrap` が入れる版
+  (`$pinnedVersion`) は `lint.ps1` の冒頭にある。**CI ランナーが上がったら
+  ここを上げる。**
+  **CI と同じパッチ版が PyPI に無いことがある** (CI の 22.1.3 は無く、22.1.7 /
+  22.1.8 が最寄り)。check セットはマイナー版で決まるので `22.1.x` を合わせれば
+  再現できる。利用可能な版は
+  `.tidy22\Scripts\pip index versions clang-tidy` で見る。
+  実測: 22.1.8 で `tools/make_app_icon.cpp` の CI failure を再現・修正確認した。
+
+  なお pip が `pypi.ngc.nvidia.com` へのリトライ警告を延々出すことがある
+  (NVIDIA のツールが `extra-index-url` を書いている。この環境では名前が引けない)。
+  **インストール自体は pypi.org へフォールバックして成功する**ので無視してよい。
+  黙らせるなら venv の中だけで上書きする:
+  `.tidy22\Scripts\pip config --site set global.extra-index-url ""`
+- **ビルドの並列化はプリセットに入っている。** MSBuild はターゲット内も
+  ターゲット間も既定で直列に走るため、`/MP` (top-level の `add_compile_options`。
+  **Visual Studio ジェネレータのときだけ**) と build プリセットの `"jobs": 0`
+  (= `--parallel`) の**両方**が要る。片方だけだと大して速くならない
+  (実測: 95 s → 38 s → 9 s。README の表)。素の `cmake --build <dir>` を叩くとき
+  だけ `--parallel` を自分で付けること。
 - **QtTest はリダイレクトされると標準出力に何も書かない。** Windows では
   コンソールが無いと判断すると `OutputDebugString` へ送るため、ctest から
   実行すると結果が見えない。`tests/CMakeLists.txt` で
@@ -160,7 +191,7 @@ pwsh scripts/package.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 3 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 4 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
@@ -168,7 +199,13 @@ pwsh scripts/package.ps1
 | 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) (完了) |
 | 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 (完了) |
 | 3 | 設定永続化、テーマ切替、エラー表示、Regex 構文警告、結果アイコン、`windeployqt` 配布 (完了) |
-| 4 | 将来 backend の受け皿 (着手は任意) |
+| 4 | トレイ常駐、グローバルホットキー、多重起動防止、`Program Files` への配置 (完了) |
+| 5 | 将来 backend の受け皿 (着手条件を満たしていない) |
+| 6 | 実利用で不満が出たときだけ着手する候補の置き場 (未確定) |
+
+Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が実在するか」であり、
+当初の並びではない。Phase 6 に並んでいるのは **「やる」ではなく「不満として
+実在したらやる」** 候補なので、先回りして実装しない。
 
 ---
 
@@ -265,3 +302,73 @@ pwsh scripts/package.ps1
 - **ツールバーアイコンの色を固定値で持たない。** palette の `ButtonText` から
   取り、テーマ変更時に描き直す (`MainWindow::refreshToolbarIcons`)。固定色だと
   Light テーマで見えなくなる。
+
+### Phase 4 で追加した不変条件
+
+- **閉じるボタンは終了ではない。** トレイが使えるなら `closeEvent` は
+  `saveSettings()` + `hide()` だけを行う。**意図的な終了処理の authority は
+  `MainWindow::quitApplication()` の 1 本** (`saveSettings()` →
+  `QApplication::quit()`) で、caller はトレイメニューの `Quit` と
+  `efs.exe --quit` の IPC の 2 つ。終了経路を増やすときも必ずここへ合流させる。
+  したがって**設定を保存するコード経路は `closeEvent` と `quitApplication()` の
+  2 本**あり、片方だけにすると、その経路で終わったときに設定が飛ぶ。
+- **「呼び出す手段が無いのに生きているプロセス」を作らない。**
+  `setQuitOnLastWindowClosed(false)` の副作用なので、トレイが使えない環境では
+  `closeEvent` から明示的に `QApplication::quit()` する。同じ理由で `--tray` は
+  `MainWindow::hasTrayIcon()` が true のときだけ隠して起動する。
+- **復帰経路は `MainWindow::showAndActivate()` の 1 本に集約する。**
+  ホットキー / トレイのクリック / 2 個目の起動 がすべてここへ入る。
+  最小化されている場合は `showNormal()` ではなく最小化ビットだけを落とす
+  (最大化していた状態を潰さないため)。
+- **グローバルホットキーは HWND を持たせず `RegisterHotKey(nullptr, …)` で
+  登録する。** `WM_HOTKEY` はスレッドのメッセージキューへ届くので、ウィンドウが
+  隠れていても・作り直されても native event filter で拾える。`MOD_NOREPEAT` を
+  必ず付ける (押しっぱなしで前面化を連打しない)。
+- **ホットキーの登録に失敗しても起動を止めない。** 他アプリとの衝突は普通に
+  起こる。非モーダルに 1 行出すだけで、アプリは通常どおり使えること。
+- **ホットキーは INI に文字列で持つ** (`hotkey/show` = `Ctrl+Alt+E`。int の生値に
+  しない)。表記の解釈は `app/HotkeySpec.*` の純粋関数、Win32 の `MOD_*` /
+  仮想キーへの写像は `app/GlobalHotkey.cpp` だけ。**修飾キー無しは拒否**
+  (OS 全体でそのキーを奪う)。空文字は「意図的に無効」として尊重し、解釈できない
+  綴りは既定へ戻す。変更する UI は作らない (設定ダイアログを作らない方針は維持)。
+- **多重起動防止のために Qt Network を入れない。** 名前付き mutex (`Local\` =
+  セッション単位) と `RegisterWindowMessageW` のブロードキャストで足りる。
+- **native event filter は `windows_generic_MSG` と `windows_dispatcher_MSG` の
+  両方を受ける。** どちらで渡されるかは Qt の内部実装次第 (実測では
+  `WM_HOTKEY` は generic)。片方に決め打つと Qt の版が変わった途端に黙って
+  効かなくなる。メッセージ種別と ID の照合は必ず行う。
+- **`CreateMutexW` の NULL を Secondary 扱いしない。** 「既に起動している」と
+  「判定そのものができなかった」は別の事象。後者 (`InstanceRole::Error`) は
+  **fail-open にせず、短い modal で理由を出して exit 1 (起動しない)**。
+  single instance は常駐 / ホットキー / `--quit` の前提そのもので、判定できない
+  まま起動を許すと efs が複数常駐しうる。要求を送れなかった Secondary も
+  exit 1 — 送れていないのに成功として終わると `install.ps1` が graceful に
+  終わったと誤解して強制終了へ進む。
+- **外から終わらせる手段は `efs.exe --quit` だけ。** 閉じる = 隠す なので
+  `WM_CLOSE` (`CloseMainWindow`) では終了しない。tray Quit と `--quit` は
+  `MainWindow::quitApplication()` の 1 本に合流させ、必ず `saveSettings()` を
+  通す。`install.ps1` はまず `--quit`、待ってから最後の手段としてだけ Kill。
+- **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等は invalid)。
+  `Qt::SkipEmptyParts` で拾うと、打ち間違えた INI が正しい綴りと同じに解釈される。
+  **同じ修飾キーの重複** (`Ctrl+Ctrl+E` / `Ctrl+Control+E` / `Meta+Win+K`) も
+  同じ理由で invalid。1 つに畳まない。
+- **install は staging + backup で入れ替える。** 旧版を消してからコピーしない。
+  ショートカット作成の失敗も含め、途中で失敗したら旧版を復元して非ゼロで
+  終わること (partial install を成功物として残さない)。実行中プロセスの照合は
+  `<Destination>\efs.exe` との**完全一致**で行う (前方一致は別物を巻き込む)。
+- **ショートカットの復元は型まで戻す。** 扱うのは `.lnk` ファイル (Leaf) だけで、
+  その path にディレクトリ等が居る場合は既存ショートカットとみなさない
+  (退避しない / rollback では取り除く)。復元は取り除いてからコピーし、最後に
+  Leaf であることを確認する。`Copy-Item -Force` の上書きに頼ると、相手が
+  ディレクトリのときに中へコピーされて `.lnk` が戻らない。
+- **rollback の進捗フラグを 1 つにまとめない。** 「旧版を退避した」と「新版を
+  配置した」を別に持つ (`previousBackedUp` / `newPlaced`)。1 つにすると、
+  退避と配置の**間**で失敗したときに旧版を戻さないまま backup ごと消す経路が
+  でき、インストールが丸ごと消える。
+- **アイコンの図形は `paintAppIcon()` の 1 箇所だけ。** Explorer 用の
+  `efs.ico` はリポジトリへコミットせず、同じ関数を呼ぶ `tools/make_app_icon.cpp`
+  がビルド時に生成して `.rc` で埋め込む。**`.ico` を手で差し替えない** —
+  実行時の表示と Explorer の表示がずれる。
+- **インストール先には何も書かない。** 設定は `%APPDATA%\efs\efs.ini` のまま。
+  これを壊すと非管理者で動かなくなる (設定を exe の隣へ置く「ポータブル版」は
+  作らない)。インストーラとコード署名は恒久的に作らない。
