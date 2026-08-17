@@ -98,6 +98,7 @@ pre-commit run --all-files
 # lint (Developer PowerShell が必要。compile_commands.json を使う)
 cmake --preset ninja-x64-debug
 cmake --build --preset ninja-x64-debug
+pwsh scripts/lint.ps1 -Bootstrap   # 初回のみ: CI と同じ 22.1 系を .tidy22 に用意
 pwsh scripts/lint.ps1
 
 # カバレッジ (要 OpenCppCoverage)
@@ -125,18 +126,22 @@ pwsh scripts/package.ps1
   `static_cast<T>(...)` か**型付きの定数**を使うこと (`tools/make_app_icon.cpp`
   がそうしている)。同時に `performance-unnecessary-copy-initialization` も
   19.1.5 より広く効く (`const QString x = list.at(i);` → 参照にする)。
-  `WarningsAsErrors: '*'` なので新しい check は即エラーになる。CI が lint で
-  落ちたら `pwsh scripts/lint.ps1 -ClangTidy <新しい clang-tidy のパス>` で手元に
-  再現させる。スクリプトはバージョンを表示するので CI ログと突き合わせられる。
-  新しい版が手元に無ければ venv に入れるのが手軽 (システムを汚さない。
-  `.gitignore` の `.tidy*/` で無視される):
+  `WarningsAsErrors: '*'` なので新しい check は即エラーになる。
+  **そこで `lint.ps1` の既定を CI と同じ 22.1 系にしてある。** リポジトリ直下の
+  `.tidy22` (venv。`.gitignore` の `.tidy*/` で無視される) を最優先で探し、
+  無ければ `-Bootstrap` で用意できる。CI ランナーには venv が無いので同梱版へ
+  フォールバックする。見つかった版が 22.1 系でなければ**警告を出してから実行する**
+  (止めはしない — 手元に古い版しか無くても lint 自体はできる方がよい)。
 
   ```powershell
-  python -m venv .tidy22
-  .tidy22\Scripts\pip install clang-tidy==22.1.8
-  pwsh scripts/lint.ps1 -ClangTidy .tidy22\Scripts\clang-tidy.exe
+  pwsh scripts/lint.ps1 -Bootstrap          # .tidy22 に clang-tidy 22.1.8 を入れる
+  pwsh scripts/lint.ps1                     # 以後は既定でそれが使われる
+  pwsh scripts/lint.ps1 -ClangTidy <path>   # 別の版を試すとき
   ```
 
+  期待バージョン (`$expectedVersion`) と `-Bootstrap` が入れる版
+  (`$pinnedVersion`) は `lint.ps1` の冒頭にある。**CI ランナーが上がったら
+  ここを上げる。**
   **CI と同じパッチ版が PyPI に無いことがある** (CI の 22.1.3 は無く、22.1.7 /
   22.1.8 が最寄り)。check セットはマイナー版で決まるので `22.1.x` を合わせれば
   再現できる。利用可能な版は

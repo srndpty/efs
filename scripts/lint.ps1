@@ -11,18 +11,21 @@
 #   cmake --preset ninja-x64-debug
 #   cmake --build --preset ninja-x64-debug
 #
-# **バージョン差に注意。** ローカル (VS 2022 同梱) と CI ランナー (より新しい
-# VS 同梱) では clang-tidy のバージョンが違い、新しい方でだけ有効な check が
-# ある。実際に modernize-use-integer-sign-comparison (clang-tidy 20 で追加) が
-# ローカル 19.1.5 を素通りして CI だけ落ちた。そのため必ずバージョンを表示し、
-# -ClangTidy で CI と同じバージョンを指して再現できるようにしてある。
+# **バージョン差に注意。** VS 2022 同梱は 19.1.5 だが CI ランナー同梱は 22.1 系で、
+# 新しい方でだけ有効な check がある (modernize-use-integer-sign-comparison は 20 で、
+# modernize-avoid-c-style-cast は 22 で追加。どちらも実際に「ローカルは緑・CI だけ
+# 失敗」を起こした)。そのため **既定を CI と同じ 22.1 系にし**、リポジトリ直下の
+# .tidy22 (venv) を最優先で探す。無ければ -Bootstrap で入れられる。
+# 見つかった版が期待と違えば警告する (止めはしない)。
 
 [CmdletBinding()]
 param(
     # compile_commands.json のあるビルドディレクトリ。
     [string]$BuildDir,
-    # 使う clang-tidy を明示指定する (CI のバージョンを手元で再現するとき)。
-    [string]$ClangTidy
+    # 使う clang-tidy を明示指定する (別のバージョンを試すとき)。
+    [string]$ClangTidy,
+    # 期待バージョンの clang-tidy を venv に用意する (要ネットワーク)。
+    [switch]$Bootstrap
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,10 +33,38 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $BuildDir) { $BuildDir = Join-Path $repo 'build\ninja-x64-debug' }
 
-# 探索順は CI と同じ。VS 同梱の VC\Tools\Llvm\bin は 32bit 版で、Qt のヘッダを
-# 解析するとアクセス違反 (0xC0000005) で落ちる。必ず x64 版を使う。
+# **既定は CI ランナーと同じ 22.1 系にする。** VS 2022 同梱の 19.1.5 を既定に
+# していた頃は、新しい check (modernize-avoid-c-style-cast 等) がローカルを
+# 素通りして CI だけが落ちていた。判定は major.minor まで — check セットは
+# そこで決まり、パッチ版は PyPI に無いこともある (CI の 22.1.3 は無い)。
+$expectedVersion = '22.1'
+# -Bootstrap で入れる版。PyPI にある実在の版であること。
+$pinnedVersion = '22.1.8'
+$venvDir = Join-Path $repo '.tidy22'
+$venvClangTidy = Join-Path $venvDir 'Scripts\clang-tidy.exe'
+
+if ($Bootstrap) {
+    if (-not (Test-Path $venvClangTidy)) {
+        Write-Host "clang-tidy $pinnedVersion を $venvDir に用意する"
+        & python -m venv $venvDir
+        if ($LASTEXITCODE -ne 0) { throw "venv を作れなかった ($venvDir)。" }
+        # NVIDIA のツールが書いた extra-index-url は名前が引けずリトライ警告を
+        # 延々出すので、この venv の中だけ黙らせる (結果には影響しない)。
+        & (Join-Path $venvDir 'Scripts\pip.exe') config --site set global.extra-index-url "" | Out-Null
+        & (Join-Path $venvDir 'Scripts\pip.exe') install "clang-tidy==$pinnedVersion"
+        if ($LASTEXITCODE -ne 0) { throw "clang-tidy $pinnedVersion を入れられなかった。" }
+    }
+    Write-Host "用意済み: $venvClangTidy"
+}
+
+# 探索順。**リポジトリの venv を最優先**にして、ローカルでも CI と同じ世代の
+# clang-tidy が既定で使われるようにする。CI ランナーには venv が無いので、
+# そのまま同梱版 (現在 22.1.3) にフォールバックする。
+# VS 同梱の VC\Tools\Llvm\bin は 32bit 版で、Qt のヘッダを解析するとアクセス
+# 違反 (0xC0000005) で落ちる。必ず x64 版を使う。
 if (-not $ClangTidy) {
     $candidates = @(
+        $venvClangTidy,
         "$env:VCINSTALLDIR\Tools\Llvm\x64\bin\clang-tidy.exe",
         'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-tidy.exe',
         'C:\Program Files\LLVM\bin\clang-tidy.exe'
@@ -42,7 +73,11 @@ if (-not $ClangTidy) {
     if (-not $ClangTidy) { $ClangTidy = (Get-Command clang-tidy -ErrorAction SilentlyContinue).Source }
 }
 if (-not $ClangTidy) {
-    throw "clang-tidy が見つからない。VS の C++ Clang ツールを入れるか -ClangTidy で指定すること。"
+    throw @"
+clang-tidy が見つからない。次のいずれかで用意すること:
+  pwsh scripts/lint.ps1 -Bootstrap        # $pinnedVersion を .tidy22 に入れる (要ネットワーク)
+  pwsh scripts/lint.ps1 -ClangTidy <path> # 既にあるものを指す
+"@
 }
 
 $compileDb = Join-Path $BuildDir 'compile_commands.json'
@@ -62,9 +97,21 @@ if ($files.Count -eq 0) {
 
 $version = (& $ClangTidy --version | Select-String 'LLVM version').ToString().Trim()
 Write-Host "clang-tidy : $ClangTidy"
-Write-Host "version    : $version"
+Write-Host "version    : $version (期待: $expectedVersion 系)"
 Write-Host "build dir  : $BuildDir"
 Write-Host "files      : $($files.Count)"
+
+# 期待バージョンからずれていたら**止めずに警告する**。古ければ CI だけが落ち、
+# 新しければローカルだけが落ちる — どちらも「なぜ手元と CI で違うのか」に
+# 時間を溶かすので、実行前に言っておく。
+$found = [regex]::Match($version, 'LLVM version (\d+)\.(\d+)')
+if (-not $found.Success -or "$($found.Groups[1].Value).$($found.Groups[2].Value)" -ne $expectedVersion) {
+    Write-Warning @"
+clang-tidy が期待バージョン ($expectedVersion 系) ではない。
+check セットが違うため、ここが緑でも CI が落ちることがある (逆もある)。
+揃えるには: pwsh scripts/lint.ps1 -Bootstrap
+"@
+}
 
 & $ClangTidy -p $BuildDir --quiet $files
 $tidyExit = $LASTEXITCODE

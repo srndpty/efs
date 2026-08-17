@@ -95,7 +95,7 @@ QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けな�
 | 目的 | 手段 |
 |---|---|
 | 整形 | `.clang-format` (LLVM ベース、100 桁、4 スペース、関数のみ開き括弧を次行) |
-| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定)。実行は `pwsh scripts/lint.ps1` — CI も同じスクリプトを呼ぶ |
+| lint | `.clang-tidy` (bugprone / performance / modernize / readability から実用的なものに限定)。実行は `pwsh scripts/lint.ps1` — CI も同じスクリプトを呼ぶ。**既定の clang-tidy は CI と同じ 22.1 系** (`-Bootstrap` で `.tidy22` に用意。版が違えば警告が出る) |
 | テスト | QtTest + `ctest` |
 | カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
 | pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
