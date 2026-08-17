@@ -49,12 +49,33 @@ public:
     void setRegex(bool regex);
     void setSort(SortKey key, SortOrder order);
 
+    // 起動時に永続化されたオプションをまとめて戻す (Phase 3 / F9)。
+    //
+    // setKind() / setRegex() / setSort() を順に呼ぶと 1 回の復元で最大 3 本の
+    // クエリが backend へ飛ぶ。ここは 4 つの値を先に全部入れてから 1 回だけ
+    // dispatch する。結果として発行されるクエリは高々 1 本 (検索欄は起動時に
+    // 空なので、復元された kind が All なら 0 本 = cleared)。
+    void restoreOptions(const SearchOptions& options);
+
+    [[nodiscard]] SearchOptions options() const;
+
     [[nodiscard]] FileKind kind() const { return m_query.kind; }
     [[nodiscard]] bool regex() const { return m_query.regex; }
     [[nodiscard]] SortKey sortKey() const { return m_query.sortKey; }
     [[nodiscard]] SortOrder sortOrder() const { return m_query.sortOrder; }
 
 signals:
+    // 実際に backend へクエリを発行した。**同期で発火する** (dispatch の中)。
+    //
+    // 用途は「表示中の結果が現在の query と食い違っている」状態を潰すこと。
+    // Everything の IPC クエリは中断できず、条件によっては 20 秒以上かかるため
+    // (README の実測)、これが無いと検索欄は新しい query なのに古い結果が
+    // 表示され、しかも操作できてしまう。cancel / timeout / fallback は追加せず、
+    // 表示だけを fail-closed にする。
+    //
+    // 絞り込み条件が無いときはクエリを出さないので、この signal ではなく
+    // 既存の cleared() が飛ぶ。
+    void searchStarted();
     // 最新の request id の結果だけが流れる。
     void resultsReady(const efs::SearchResults& results);
     // 絞り込み条件が 1 つも無くなった (テキスト空 かつ FileKind::All)。

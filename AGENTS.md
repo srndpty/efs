@@ -39,6 +39,8 @@ C++20 / Qt 6.8 / CMake / MSVC 2022 / x64 のみ。
 | Everything SDK の封じ込め | `Everything.h` を include してよいのは `src/backend/everything/` 配下と、SDK 自体を直接検証する `tests/` のみ。SDK の include パスは `efs_core` の **PRIVATE** に置き、リンクしただけでは伝播させない。 |
 | スレッド | Everything SDK の呼び出しは検索スレッド 1 本に直列化する。SDK はグローバル状態を持つのでスレッドプール化は禁止。 |
 | 純粋関数 | クエリ組み立て・書式整形は Qt 以外に依存しない自由関数にし、単体テストの主戦場にする。 |
+| `efs_core` の依存 | `Qt6::Core` + `Qt6::Gui` まで。**`Qt6::Widgets` と Win32 を足さない。** Widgets は `MainWindow` / `IconDelegate` 等、Win32 は `Theme.cpp` / `FileActions.cpp` / `ShellIcon.cpp` に閉じ込める。 |
+| 設定 | `QSettings` を触ってよいのは `app/Settings.*` だけ。MainWindow の各所から直接呼ばない。 |
 
 ### オーバーエンジニアリングを避ける
 これは個人用ツールであり、最優先は**日常利用できる MVP を早く完成させること**。
@@ -99,6 +101,9 @@ pwsh scripts/lint.ps1
 
 # カバレッジ (要 OpenCppCoverage)
 pwsh scripts/coverage.ps1
+
+# 配布ディレクトリ (dist\efs\) を作る
+pwsh scripts/package.ps1
 ```
 
 実行時は Qt の DLL に PATH を通す:
@@ -155,14 +160,14 @@ pwsh scripts/coverage.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 2 (MVP) 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 3 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
 | 0 | Qt 導入、Everything SDK の動的ロード、`ext:` + `regex:` の実機検証 (完了) |
 | 1 | 検索が動く MVP コア (type-as-you-search、ワーカースレッド、結果テーブル) (完了) |
 | 2 | 種別フィルタ、Regex トグル、ダークテーマ、ソート、右クリックメニュー = MVP 完成 (完了) |
-| 3 | 設定永続化、エラー表示、アイコン、`windeployqt` |
+| 3 | 設定永続化、テーマ切替、エラー表示、Regex 構文警告、結果アイコン、`windeployqt` 配布 (完了) |
 | 4 | 将来 backend の受け皿 (着手は任意) |
 
 ---
@@ -208,4 +213,55 @@ pwsh scripts/coverage.ps1
   返すので、素朴な連結ではドライブ相対パスになる。
 - **シェルのコマンド文字列を組み立てない。** ファイルを開く / Explorer で選択は
   `QDesktopServices::openUrl` と `SHOpenFolderAndSelectItems`(PIDL) を使い、
-  Windows 固有処理は `app/FileActions.*` と `app/Theme.cpp` に閉じ込める。
+  Windows 固有処理は `app/FileActions.*` / `app/Theme.cpp` / `app/ShellIcon.cpp`
+  に閉じ込める。
+
+### Phase 3 で追加した不変条件
+
+- **設定の復元でクエリを fan-out させない。** 起動時は
+  `SearchController::restoreOptions()` で kind / regex / sortKey / sortOrder を
+  まとめて入れ、**最後に 1 回だけ** dispatch する。`setKind()` → `setRegex()` →
+  `setSort()` と順に呼ぶ実装へ戻すと、復元だけで最大 3 本のクエリが backend へ
+  飛ぶ。検索欄は起動時に空なので、発行されるのは高々 1 本
+  (復元された kind が `All` なら 0 本)。回帰テストは `test_search_controller.cpp` の
+  `restoreDoesNotFanOutIntoMultipleQueries` ほか。
+- **表示中の結果と現在の query を食い違わせない。** `SearchController` は
+  クエリ発行時に `searchStarted` を**同期で**発火し、`MainWindow` はそこで結果を
+  空にして `Searching…` を出す。Everything の IPC クエリは中断できず 20 秒以上
+  かかることがあるため、これが無いと「検索欄は別の条件なのに古い結果を開ける」
+  状態になる。**cancel / timeout / fallback は追加しない** — 直すのは表示だけ。
+  また `MainWindow` は controller の signal を繋いだ**後で** `restoreOptions()` を
+  呼ぶこと。逆にすると復元時の初回クエリだけ `Searching…` を取りこぼす。
+- **検索文字列を永続化しない。** search history と意味が混ざる。Phase 3 の
+  スコープ外であり、`test_settings.cpp` の `searchTextIsNotPersisted` が
+  INI のキー一覧ごと固定している。
+- **アイコンの lookup を result paint / `data()` から実ファイルへ同期で行わない。**
+  `DecorationRole` のたびに `QFileInfo` / `QFileIconProvider` を実パスへ呼ぶと
+  5,000 行のスクロールでディスク I/O に張り付く。lookup の単位は「ファイル」では
+  なく**種別** (`dir:` / `ext:<小文字>`) で、専用スレッド 1 本、同じキーの要求は
+  重複させない。`SHGetFileInfoW` には必ず `SHGFI_USEFILEATTRIBUTES` を付け、
+  実ファイルへは触らない。`HICON` は `QImage` へコピー後に必ず `DestroyIcon`。
+- **アイコン完了通知に行番号を持たせない。** `IconCache::imagesReady` は
+  viewport の塗り直しだけを促す。行を指す通知にすると、モデル reset 後や
+  高速な検索切替中に古い行を触って壊れる。またここで `IconDelegate` の
+  `QPixmap` cache を全 clear しないこと — 未解決キーの placeholder は
+  cache に入れていないので塗り直すだけで本物に差し替わる。clear すると
+  アイコンが 1 つ届くたびに解決済み全件を再変換する。
+- **COM の初期化と解放を対にする。** `ShellIcon.cpp` の `CoInitializeEx` が
+  成功した (`S_OK` / `S_FALSE`) ときだけ、そのスレッドの終了時に
+  `CoUninitialize` を 1 回呼ぶ (`thread_local` な RAII)。`RPC_E_CHANGED_MODE`
+  等の失敗で呼ぶと、他所が張った初期化を剥がしてしまう。
+- **`windeployqt` だけでは `Everything64.dll` は入らない。** Qt の依存しか見ない
+  ので、`scripts/package.ps1` の明示コピーを消さないこと。消すと配布版だけが
+  「検索が全部失敗する」状態になる。
+- **Regex の validator を backend の authority にしない。** `validateRegex()` は
+  UI の見た目のための best-effort であり、invalid と判定してもユーザーの
+  パターンを書き換えず、検索は既存経路でそのまま Everything へ渡す。
+  **「0 件だから invalid」と判定してはならない** (Everything は構文エラーでも
+  0 件を返すが、valid でも 0 件はありうる)。
+- **テーマ切替で `QApplication::setStyle()` を呼び直さない** (既に Fusion なら)。
+  全 widget が再 polish され、ステータスバーの表示中メッセージが消える。
+  また stylesheet は追記せず毎回まるごと差し替える (累積させない)。
+- **ツールバーアイコンの色を固定値で持たない。** palette の `ButtonText` から
+  取り、テーマ変更時に描き直す (`MainWindow::refreshToolbarIcons`)。固定色だと
+  Light テーマで見えなくなる。

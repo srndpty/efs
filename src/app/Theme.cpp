@@ -3,7 +3,9 @@
 #include <QApplication>
 #include <QColor>
 #include <QPalette>
+#include <QStyle>
 #include <QStyleFactory>
+#include <QStyleHints>
 #include <QWidget>
 
 #include <windows.h>
@@ -15,50 +17,87 @@ namespace efs {
 namespace {
 
 // 配色。QPalette のロールへ割り当てる元の値をここ 1 箇所に置く。
-constexpr auto kWindow = "#1e1e1e";        // MainWindow / toolbar の地
-constexpr auto kBase = "#181818";          // 検索欄・テーブルの地
-constexpr auto kAlternateBase = "#232323"; // 交互行
-constexpr auto kButton = "#2d2d30";        // ボタン・ヘッダ
-constexpr auto kText = "#e6e6e6";
-constexpr auto kDisabledText = "#7a7a7a";
-constexpr auto kHighlight = "#0a84ff"; // 選択行
-constexpr auto kHighlightedText = "#ffffff";
-constexpr auto kTooltipBase = "#2d2d30";
-constexpr auto kPlaceholder = "#8a8a8a";
-constexpr auto kBorder = "#3c3c3c";
-constexpr auto kChecked = "#094771"; // チェック済みツールバーボタン
-constexpr auto kCheckedBorder = "#0a84ff";
-constexpr auto kHover = "#37373d";
+// Dark は Phase 2 の値をそのまま (見た目を regression させない)。
+struct Colors {
+    const char* window;
+    const char* base;
+    const char* alternateBase;
+    const char* button;
+    const char* text;
+    const char* disabledText;
+    const char* highlight;
+    const char* highlightedText;
+    const char* tooltipBase;
+    const char* placeholder;
+    const char* border;
+    const char* checked; // チェック済みツールバーボタンの地
+    const char* checkedBorder;
+    const char* hover;
+};
 
-QPalette darkPalette()
+constexpr Colors kDark{
+    .window = "#1e1e1e",
+    .base = "#181818",
+    .alternateBase = "#232323",
+    .button = "#2d2d30",
+    .text = "#e6e6e6",
+    .disabledText = "#7a7a7a",
+    .highlight = "#0a84ff",
+    .highlightedText = "#ffffff",
+    .tooltipBase = "#2d2d30",
+    .placeholder = "#8a8a8a",
+    .border = "#3c3c3c",
+    .checked = "#094771",
+    .checkedBorder = "#0a84ff",
+    .hover = "#37373d",
+};
+
+constexpr Colors kLight{
+    .window = "#f3f3f3",
+    .base = "#ffffff",
+    .alternateBase = "#f7f7f7",
+    .button = "#e8e8e8",
+    .text = "#1a1a1a",
+    .disabledText = "#9a9a9a",
+    .highlight = "#0a6ed1",
+    .highlightedText = "#ffffff",
+    .tooltipBase = "#ffffff",
+    .placeholder = "#767676",
+    .border = "#c8c8c8",
+    .checked = "#cfe3f7",
+    .checkedBorder = "#0a6ed1",
+    .hover = "#dcdcdc",
+};
+
+QPalette paletteFor(const Colors& c)
 {
     QPalette palette;
-    const QColor text(kText);
-    const QColor disabled(kDisabledText);
+    const QColor text(c.text);
+    const QColor disabled(c.disabledText);
 
-    palette.setColor(QPalette::Window, QColor(kWindow));
+    palette.setColor(QPalette::Window, QColor(c.window));
     palette.setColor(QPalette::WindowText, text);
-    palette.setColor(QPalette::Base, QColor(kBase));
-    palette.setColor(QPalette::AlternateBase, QColor(kAlternateBase));
+    palette.setColor(QPalette::Base, QColor(c.base));
+    palette.setColor(QPalette::AlternateBase, QColor(c.alternateBase));
     palette.setColor(QPalette::Text, text);
-    palette.setColor(QPalette::PlaceholderText, QColor(kPlaceholder));
-    palette.setColor(QPalette::Button, QColor(kButton));
+    palette.setColor(QPalette::PlaceholderText, QColor(c.placeholder));
+    palette.setColor(QPalette::Button, QColor(c.button));
     palette.setColor(QPalette::ButtonText, text);
     palette.setColor(QPalette::BrightText, QColor(Qt::red));
-    palette.setColor(QPalette::Highlight, QColor(kHighlight));
-    palette.setColor(QPalette::HighlightedText, QColor(kHighlightedText));
-    palette.setColor(QPalette::ToolTipBase, QColor(kTooltipBase));
+    palette.setColor(QPalette::Highlight, QColor(c.highlight));
+    palette.setColor(QPalette::HighlightedText, QColor(c.highlightedText));
+    palette.setColor(QPalette::ToolTipBase, QColor(c.tooltipBase));
     palette.setColor(QPalette::ToolTipText, text);
-    palette.setColor(QPalette::Link, QColor(kCheckedBorder));
-    palette.setColor(QPalette::Light, QColor(kBorder));
-    palette.setColor(QPalette::Mid, QColor(kBorder));
-    palette.setColor(QPalette::Dark, QColor(kBase));
+    palette.setColor(QPalette::Link, QColor(c.checkedBorder));
+    palette.setColor(QPalette::Light, QColor(c.border));
+    palette.setColor(QPalette::Mid, QColor(c.border));
+    palette.setColor(QPalette::Dark, QColor(c.base));
     palette.setColor(QPalette::Shadow, QColor(Qt::black));
 
-    // 無効状態。既定のままだと明るい地に明るい文字が乗って読めなくなる。
+    // 無効状態。既定のままだと地と文字のコントラストが足りず読めなくなる。
     for (QPalette::ColorRole role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText})
         palette.setColor(QPalette::Disabled, role, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::Highlight, QColor(kButton));
+    palette.setColor(QPalette::Disabled, QPalette::Highlight, QColor(c.button));
     palette.setColor(QPalette::Disabled, QPalette::HighlightedText, disabled);
 
     return palette;
@@ -66,7 +105,7 @@ QPalette darkPalette()
 
 // palette だけでは Fusion が十分な差を付けてくれない箇所の補正。
 // これ以上 widget を個別指定して肥大させない。
-QString detailStyleSheet()
+QString detailStyleSheet(const Colors& c)
 {
     return QStringLiteral("QToolBar { border: 0px; padding: 2px; spacing: 2px; }"
                           "QToolButton { padding: 3px 8px; border: 1px solid transparent;"
@@ -76,23 +115,49 @@ QString detailStyleSheet()
                           "QHeaderView::section { background: %4; color: %5; padding: 4px;"
                           " border: 0px; border-right: 1px solid %6; }"
                           "QToolTip { background: %7; color: %5; border: 1px solid %6; }")
-        .arg(QLatin1String(kHover), QLatin1String(kChecked), QLatin1String(kCheckedBorder),
-             QLatin1String(kButton), QLatin1String(kText), QLatin1String(kBorder),
-             QLatin1String(kTooltipBase));
+        .arg(QLatin1String(c.hover), QLatin1String(c.checked), QLatin1String(c.checkedBorder),
+             QLatin1String(c.button), QLatin1String(c.text), QLatin1String(c.border),
+             QLatin1String(c.tooltipBase));
 }
 
 } // namespace
 
-void applyDarkTheme(QApplication& app)
+bool resolveDark(ThemeMode mode)
 {
-    // Fusion にするのは、Windows ネイティブスタイルが palette を無視して
-    // 明るいまま描く箇所があるため (計画 7)。
-    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
-    QApplication::setPalette(darkPalette());
-    app.setStyleSheet(detailStyleSheet());
+    switch (mode) {
+    case ThemeMode::Dark:
+        return true;
+    case ThemeMode::Light:
+        return false;
+    case ThemeMode::System:
+        break;
+    }
+    // OS の配色。Unknown のときは既定 (Dark) 側へ倒す。
+    return QGuiApplication::styleHints()->colorScheme() != Qt::ColorScheme::Light;
 }
 
-void applyDarkTitleBar(QWidget* window)
+void applyTheme(QApplication& app, ThemeMode mode)
+{
+    const Colors& colors = resolveDark(mode) ? kDark : kLight;
+
+    // Fusion にするのは、Windows ネイティブスタイルが palette を無視して
+    // 明るいまま描く箇所があるため (計画 7)。
+    //
+    // **既に Fusion なら差し替えない。** setStyle は全 widget を作り直しに近い
+    // 再 polish にかけるため、テーマを切り替えるたびに呼ぶとステータスバーの
+    // 表示中メッセージが消える (Phase 3 の Light 対応で実際に起きた)。
+    // スタイルはテーマに依らず同じなので、初回だけでよい。
+    const QStyle* current = QApplication::style();
+    if (current == nullptr ||
+        current->name().compare(QLatin1String("fusion"), Qt::CaseInsensitive) != 0)
+        QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+
+    QApplication::setPalette(paletteFor(colors));
+    // 追記ではなく差し替え。何度切り替えても stylesheet は累積しない。
+    app.setStyleSheet(detailStyleSheet(colors));
+}
+
+void applyTitleBarTheme(QWidget* window, bool dark)
 {
     if (!window)
         return;
@@ -104,8 +169,8 @@ void applyDarkTitleBar(QWidget* window)
     // **best-effort。** この属性の挙動について Microsoft は互換性を保証して
     // おらず、対応しない環境では DwmSetWindowAttribute が失敗してタイトルバーが
     // 明るいまま残るだけ (害は無いので戻り値は見ない)。Windows 11 26200 で
-    // 実際に暗くなることは確認済み。それ以上の強制 Dark 化は Phase 3 まで行わない。
-    const BOOL enabled = TRUE;
+    // 実際に切り替わることは確認済み。
+    const BOOL enabled = dark ? TRUE : FALSE;
     // QWidget::winId() は WId (quintptr) を返すので、HWND へ戻すには整数から
     // ポインタへのキャストしか無い。Qt と Win32 の境界そのもの。
     // NOLINTNEXTLINE(performance-no-int-to-ptr)

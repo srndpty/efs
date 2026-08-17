@@ -12,7 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(EFS_BUILD_TESTS "テストをビルドする" ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets)
 qt_standard_project_setup()
 
 # テスト実行時に Qt の DLL を PATH へ通すために使う。
@@ -60,6 +60,13 @@ add_library(efs_core STATIC
     src/app/SearchController.cpp
     src/app/ResultTableModel.h
     src/app/ResultTableModel.cpp
+    src/app/Settings.h
+    src/app/Settings.cpp
+    src/app/RegexValidation.h
+    src/app/RegexValidation.cpp
+    src/app/IconCache.h
+    src/app/IconCache.cpp
+    src/app/Theme.h
 )
 # src は PUBLIC (利用側が EverythingApi.h を include する)。
 # Everything SDK は PRIVATE。これを PUBLIC にすると efs_core にリンクするだけで
@@ -68,7 +75,11 @@ target_include_directories(efs_core
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE "${EFS_EVERYTHING_SDK_DIR}"
 )
-target_link_libraries(efs_core PUBLIC Qt6::Core)
+# Qt6::Gui はアイコンキャッシュ (IconCache) が QImage を扱うため。QImage は
+# thread-safe な値型で QGuiApplication を必要としないので、テストは
+# QTEST_GUILESS_MAIN のまま書ける。**Widgets と Win32 はここへ入れない** —
+# QPixmap/QIcon 化は IconDelegate、shell lookup は ShellIcon.cpp (どちらも efs 側)。
+target_link_libraries(efs_core PUBLIC Qt6::Core Qt6::Gui)
 target_compile_definitions(efs_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
 # --- efs (GUI) ----------------------------------------------------------------
@@ -76,16 +87,20 @@ qt_add_executable(efs WIN32
     src/app/main.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
-    src/app/Theme.h
     src/app/Theme.cpp
     src/app/ToolbarIcons.h
     src/app/ToolbarIcons.cpp
     src/app/FileActions.h
     src/app/FileActions.cpp
+    src/app/ShellIcon.h
+    src/app/ShellIcon.cpp
+    src/app/IconDelegate.h
+    src/app/IconDelegate.cpp
 )
-# dwmapi: タイトルバーのダーク化 (Theme.cpp)。
-# shell32 / ole32: Explorer で選択 (FileActions.cpp)。どちらも Windows 固有
-# 処理を閉じ込めた 2 ファイルだけが使う。
+# dwmapi: タイトルバーの明暗 (Theme.cpp)。
+# shell32 / ole32: Explorer で選択 (FileActions.cpp) と種別アイコンの
+# SHGetFileInfoW (ShellIcon.cpp)。いずれも Windows 固有処理を閉じ込めた
+# ファイルだけが使う。
 target_link_libraries(efs PRIVATE efs_core Qt6::Widgets dwmapi shell32 ole32)
 efs_copy_everything_dll(efs)
 

@@ -3,10 +3,10 @@
 Everything を検索エンジンとして使う Windows 向けファイル検索 UI。
 アプリの UI 表示は英語。x64 のみ。
 
-現在の状態: **Phase 2 (MVP) 完了** — ダークテーマ既定、種別フィルタツールバー、
-Regex トグル、ヘッダクリックによる backend ソート、ダブルクリック / Enter で開く、
-右クリックメニュー (Open / Show in Explorer / Copy Full Path / Copy Name) まで動く。
-設定の永続化・結果行のアイコン・windeployqt は Phase 3。
+現在の状態: **Phase 3 完了** — MVP (種別フィルタ、Regex トグル、backend ソート、
+右クリックメニュー) に加えて、設定の永続化、テーマ切替 (System / Dark / Light)、
+backend error の非モーダル表示、Regex の構文警告、結果行のファイル種別アイコン、
+`windeployqt` による配布ディレクトリ生成まで動く。
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 この README には実測で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
@@ -38,9 +38,16 @@ cmake --preset msvc2022-x64
 cmake --build --preset msvc2022-x64-debug      # または msvc2022-x64-release
 ctest --preset msvc2022-x64-debug
 
-$env:PATH = "C:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"   # windeployqt 導入 (Phase 3) までの暫定
+$env:PATH = "C:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"   # 開発ビルドを直接動かす場合
 .\build\msvc2022-x64\Debug\efs.exe
 ```
+
+配布ディレクトリを作れば PATH を通さずに起動できる (下の「配布」を参照)。
+どちらの場合も **Everything 本体 (`Everything.exe`) が別途インストールされ、
+起動している必要がある。** efs は検索エンジンを持たず、Everything の IPC を
+呼ぶだけなので、Everything が動いていないと検索はすべて失敗する
+(その場合はステータスバーと検索欄の下に理由が出る)。efs は Everything を
+自動起動しない。
 
 Visual Studio ジェネレータはマルチ構成のため、configure プリセットは
 `msvc2022-x64` の 1 つで、build / test プリセットが Debug / Release に分かれる。
@@ -55,7 +62,7 @@ clang-tidy は `compile_commands.json` を要求するので、lint だけは Ni
 |---|---|
 | `efs_core` | 静的ライブラリ。Qt Widgets に依存しないものすべて (core / backend / 検索スレッド / テーブルモデル) |
 | `efs` | WIN32 GUI 実行ファイル。`MainWindow` と `main()` だけを持つ |
-| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_everything_api` / `test_everything_backend`) |
+| `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_settings` / `test_regex_validation` / `test_icon_cache` / `test_everything_api` / `test_everything_backend`) |
 
 QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けないため、テストは
 ファイル単位でターゲットを分けている。共通設定は `tests/CMakeLists.txt` の
@@ -70,10 +77,160 @@ QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けな�
 | テスト | QtTest + `ctest` |
 | カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
 | pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
-| CI | `.github/workflows/ci.yml` — format / build & test (Debug・Release) / lint / coverage |
+| 配布 | `pwsh scripts/package.ps1` — Release ビルド + `windeployqt` + `Everything64.dll` |
+| CI | `.github/workflows/ci.yml` — format / build & test (Debug・Release) / lint / coverage / package |
 
 CI 上には Everything が存在しないため、IPC を伴うテストは `QSKIP` される。
-これは意図した挙動。カバレッジに閾値は設けていない。
+これは意図した挙動。カバレッジに閾値は設けていない。package ジョブが見るのも
+Qt の deployment と必須ファイルの存在だけで、Everything の IPC は要求しない。
+
+## 動作 (Phase 3)
+
+### 設定の永続化
+
+`%APPDATA%\efs\efs.ini` (INI 形式なので目視・手編集できる)。保存は終了時の 1 回だけ。
+
+| 保存するもの | 既定値 |
+|---|---|
+| テーマ (`system` / `dark` / `light`) | `dark` |
+| 種別フィルタ (`all` / `image` / `video` / `audio` / `document` / `directory`) | `all` |
+| Regex ON/OFF | `false` |
+| ソートキー (`name` / `path` / `size` / `dateModified`) | `name` |
+| ソート順 (`asc` / `desc`) | `asc` |
+| ウィンドウのジオメトリ・状態・列ヘッダ状態 (列幅 / 列順) | なし (既定サイズ・既定列幅) |
+
+**保存しないもの: 検索文字列、検索履歴、最近使った query、結果行、Everything の状態。**
+検索文字列の永続化は search history と意味が混ざるため Phase 3 では行わない。
+
+列挙型は int の生値ではなく安定した文字列で書く (列挙子の順序を入れ替えても
+既存の INI が別の意味にならないため)。`settingsVersion` が現行 (`1`) と違う、
+値が未知、型が合わない、いずれの場合も**その項目は既定値へ戻る**。ジオメトリが
+壊れていれば Qt の `restoreGeometry` が false を返すだけで、既定のサイズが残る。
+画面外へ出たウィンドウを補正する独自計算は持たない。
+
+起動時の復元は `SearchController::restoreOptions()` で 4 つの値をまとめて入れ、
+**最後に 1 回だけ検索を発行する**。`setKind` / `setRegex` / `setSort` を順に
+呼ぶと復元だけで最大 3 本のクエリが飛ぶため。検索欄は起動時に空なので、
+実際に飛ぶのは「復元された種別が `all` 以外」のときの filter-only クエリ 1 本だけ
+(`all` なら 0 本 = `Ready` 表示)。
+
+### テーマ
+
+ツールバー右端の `Theme` から System / Dark / Light。既定は Dark。
+System は起動時と明示選択時に OS の配色 (`QStyleHints::colorScheme()`) を見る
+— 実行中の OS 側の変更に追従するところまでは Phase 3 ではやらない。
+Windows のタイトルバーも `DwmSetWindowAttribute` で追従する。
+
+stylesheet は切り替えのたびに丸ごと差し替えるので累積しない。
+なお `QApplication::setStyle()` は **既に Fusion なら呼び直さない** —
+切り替えのたびに呼ぶと全 widget が再 polish され、ステータスバーの表示中
+メッセージが消える (実測)。
+
+### エラー表示
+
+「正常に 0 件」と「検索できなかった」を取り違えないようにしてある。
+
+| 状態 | ステータスバー |
+|---|---|
+| 検索中 | `Searching…` (結果テーブルは空) |
+| 正常 | `265 results / 254 ms` — 一致 0 件でも `0 results / 4 ms` |
+| 失敗 | `Search failed: Everything is not running.` |
+
+失敗時は検索欄の下にも同じ文言を赤い 1 行で出す。**modal は出さない**
+(検索のたびに popup を連打しないため)。同じエラーが続いても表示は 1 つのまま。
+正常に完了した次の検索で解除される。失敗したときは結果テーブルを空にする
+— 前回の行が残っていると「成功した結果」に見えてしまうため。
+DLL のパス等の内部診断は `qWarning` へ流し、UI には出さない。
+
+### 検索中の表示 (in-flight search)
+
+`SearchController` は実際に backend へクエリを発行した時点で `searchStarted` を
+**同期に**発火する。UI はこれを受けて結果テーブルを空にし、前回の backend error を
+下ろし、ステータスバーを `Searching…` にする (Regex の構文警告は検索の進行とは
+無関係なので維持する)。絞り込み条件が無いときはクエリを出さないので、
+`searchStarted` ではなく既存の `cleared` 経路で `Ready` に戻る。
+
+理由: Everything の IPC クエリは中断できず、条件によっては 20 秒以上かかる
+(下の実測)。これが無いと**検索欄はもう別の条件なのに前の結果が表示され、しかも
+ダブルクリックで開けてしまう**。cancel / timeout / fallback は追加せず、
+「表示中の結果と現在の query の食い違い」だけを fail-closed にしてある。
+
+この signal は接続順に依存する。`MainWindow` は controller の signal を繋いで
+ステータスバーを初期化した**後で** `restoreOptions()` を呼ぶ — 逆にすると
+復元時の初回 filter-only クエリだけ `Searching…` を取りこぼす。
+
+### Regex の構文警告
+
+Regex ON のときだけ、`QRegularExpression` で構文を **best-effort に** 見る。
+不正なら検索欄の枠を赤くし、ツールチップと赤い 1 行に
+`Invalid regular expression at offset 0: quantifier does not follow a repeatable item`
+のように出す。Regex OFF に戻すと表示は消える。
+
+**これは advisory であって backend の authority ではない。** 不正と判定しても
+ユーザーのパターンは一字も書き換えず、検索は既存経路でそのまま Everything へ渡す。
+空白だけのパターンは有効な検索条件として扱う (P2 の whitespace 契約)。
+互換性の実測は下の「Phase 3 の検証結果」を参照。
+
+### 結果行のアイコン
+
+Name 列に Windows のファイル種別アイコンを出す。
+
+- **paint / `data()` から実ファイルへ同期 I/O を出さない。** 5,000 行で
+  `QFileInfo` / `QFileIconProvider` を実パスに対して呼ぶとディスク I/O で固まる。
+- lookup の単位は「ファイル」ではなく**種別**。キーは
+  ディレクトリ = `dir:`、拡張子 = `ext:<小文字>` (`archive.tar.gz` → `ext:gz`、
+  拡張子なし = `ext:`)。同じ `.txt` が 500 行あっても shell lookup は 1 回。
+- lookup はアイコン専用のワーカースレッド 1 本。同じキーの要求は重複させない。
+  失敗した lookup も記録するので、未知の拡張子を毎回引き直さない。
+- 実ファイルには触れず、`SHGetFileInfoW` + `SHGFI_USEFILEATTRIBUTES` で
+  「拡張子 + ファイル属性」だけから引く。`HICON` は `QImage::fromHICON` で
+  コピーしたのち必ず `DestroyIcon` する。
+- 完了通知 (`IconCache::imagesReady`) は**行番号を持たない**。受け手は viewport を
+  塗り直すだけなので、通知が届いた時点でモデルが reset 済みでも行が消えていても
+  不整合が起きない。cache を捨てる必要も無い — 未解決キーの placeholder は
+  delegate 側の `QPixmap` cache に**入れていない**ので、次の paint で自然に本物へ
+  差し替わる。別のキーのアイコンが 1 つ届くたびに解決済みの `QImage`→`QPixmap`
+  変換をやり直すことはしない。
+- `SHGetFileInfoW` は shell の COM を使うので、worker スレッドでは
+  `thread_local` な RAII (`ComScope`) で 1 回だけ `CoInitializeEx` し、
+  **成功したときだけ**スレッド終了時に `CoUninitialize` する
+  (`RPC_E_CHANGED_MODE` 等の失敗で呼ぶと他所の初期化を剥がしてしまう)。
+- この方針の代償として `.exe` などの「ファイル固有アイコン」は再現されず、
+  汎用の種別アイコンになる。Phase 3 では高速・安定であることを優先した。
+  アイコンは shell の小アイコン (16px) なので、高 DPI では拡大される。
+
+### キーボード
+
+`Ctrl+L` / `Ctrl+F` で検索欄へフォーカス + 全選択。`Esc` は検索文字列が
+入っていれば消す (空なら何もしない)。**`Esc` でアプリは終了しない。**
+グローバルホットキーは実装しない。
+
+## 配布
+
+```powershell
+pwsh scripts/package.ps1                       # → dist\efs\
+pwsh scripts/package.ps1 -BuildDir build/ci -Config Release   # CI
+```
+
+手順は Release ビルド → `efs.exe` を配置 → `windeployqt --release` →
+`Everything64.dll` を明示コピー → 必須ファイルの存在確認。
+
+- **fail-closed。** 前回の出力を消してから始め、各コマンドの終了コードと
+  `efs.exe` / `Everything64.dll` / `Qt6Core.dll` / `Qt6Gui.dll` /
+  `Qt6Widgets.dll` / `platforms\qwindows.dll` の存在を確認する。途中で失敗したら
+  作りかけの `dist` を消して非ゼロで終わる (古い package を成功物として残さない)。
+- **必要ファイルの authority は `windeployqt`。** 上の一覧は「これが無ければ
+  確実に起動しない」ものだけで、網羅リストではない。
+- **`windeployqt` は `Everything64.dll` を知らない。** Qt の依存しか見ないので、
+  アプリが実行時に `LoadLibraryW` する DLL は明示コピーが要る。
+- Qt のパスはスクリプトに固定しない。`-WindeployQt` → `-QtBin` →
+  ビルドディレクトリの `CMakeCache.txt` の `CMAKE_PREFIX_PATH` / `Qt6_DIR` →
+  `QT_ROOT_DIR` / `QTDIR` → `PATH` の順に解決し、見つからなければ**探した場所を
+  全部並べて**失敗する。
+
+起動は `dist\efs\efs.exe` をそのまま実行するだけ。Qt を `PATH` に通す必要はない
+(実測: Qt の入っていない `PATH` で起動を確認済み)。**Everything 本体は別途
+起動している必要がある。**
 
 ## Phase 0 の検証結果
 
@@ -262,6 +419,143 @@ filter-only クエリ (テキスト空 + 種別) も測った:
 拡張子が 14 個ある Document が最も重く、1 秒を超えることがある。UI はブロックしない
 (検索スレッド + stale 破棄) が、ツールバーを押してから結果が出るまでに 1 秒前後
 かかる場合がある。**Phase 2 では対処しない** (実測値の提示にとどめる)。
+
+## Phase 3 の検証結果
+
+### Regex 互換性 probe — `QRegularExpression` を advisory に使ってよい (実測で確定)
+
+Everything 1.4 は不正な正規表現を error として返さず **0 件**を返す (P2 で確定)。
+そのため「0 件 = invalid」とは判定できず、UI の構文警告はローカルの
+`QRegularExpression` に頼るしかない。両者のエンジンが同一である保証は無いので、
+実装前に陽性対照ファイル (`efsp3probe_abc.txt` / `efsp3probe_a00.txt` /
+`efsp3probe alpha.txt` / `efsp3probe_a.b.txt` / `efsp3probe_(paren).txt` /
+`efsp3probe_日本語.txt`) を置いて 28 パターンを突き合わせた。
+
+Everything 側は `regex:"<パターン>"` (= 製品と同じ経路) で実行し、
+`totalMatches` を見た。
+
+| パターン | Qt | Everything |
+|---|---|---|
+| `efsp3probe` | valid | 6 |
+| `^efsp3probe_abc\.txt$` | valid | 1 |
+| `efsp3probe_abc\|efsp3probe_a00` | valid | 2 |
+| `efsp3probe_(abc\|a00)` | valid | 2 |
+| `efsp3probe_[a-c]+\.txt` | valid | 1 |
+| `efsp3probe_a\d+` | valid | 1 |
+| `efsp3probe_a{1,3}0` | valid | 1 |
+| `efsp3probe_a\.b` | valid | 1 |
+| `efsp3probe alpha` (空白) | valid | 1 |
+| `efsp3probe\salpha` | valid | 1 |
+| `efsp3probe_\(paren\)` | valid | 1 |
+| `efsp3probe_日本語` (Unicode) | valid | 1 |
+| `efsp3probe_(?=abc)` (先読み) | valid | 1 |
+| `efsp3probe_abc(?!zzz)` (否定先読み) | valid | 1 |
+| `(?<=efsp3probe_)abc` (後読み) | valid | 1 |
+| `efsp3probe_(?:abc\|a00)` | valid | 2 |
+| `(?i)EFSP3PROBE_ABC` | valid | 1 |
+| `efsp3probe_a*bc` / `efsp3probe_a.b` | valid | 1 |
+| **`efsp3probe_zzzznomatch`** (陰性対照) | **valid** | **0** |
+| `efsp3probe_(` | INVALID (offset 12) | 0 |
+| `efsp3probe_[` | INVALID (offset 12) | 0 |
+| `efsp3probe_\` | INVALID (offset 12) | 0 |
+| `efsp3probe_abc)` | INVALID (offset 14) | 0 |
+| `efsp3probe_a{3,1}` | INVALID (offset 16) | 0 |
+| `*efsp3probe` | INVALID (offset 0) | 0 |
+| `efsp3probe_a{1,` | valid (リテラル解釈) | 0 |
+| `efsp3probe_+` | valid | 5 |
+
+読み取れたこと:
+
+- **日常的な構文で非互換は見つからなかった。** 先読み / 後読み / `(?i)` /
+  `\s` / Unicode まで、Everything 1.4 は Qt と同じように解釈している。
+- **「Qt が invalid と言うのに Everything では動く」ケースは 1 つも無かった。**
+  誤って赤くする方向の事故が起きないので、advisory として使ってよい。
+- 陰性対照が示すとおり **0 件は invalid の証拠にならない**。`efsp3probe_a{1,`
+  は Qt でも valid (PCRE は `{1,` をリテラルとみなす) で、0 件なのは単に
+  一致するファイルが無いから。判定の根拠に件数を使ってはならない。
+
+この probe は目的を達成したので、調査用の一時ターゲットは削除した。
+固定した内容は `tests/test_regex_validation.cpp` の corpus に移してある。
+
+### Regex 検索の実測 — Everything 側は線形走査で数十秒かかることがある
+
+`Image` フィルタ (2,410,588 件) + Regex ON で `a12` を検索したところ
+**3,653 results / 24,572 ms**。`ext:` だけの filter-only が 311ms で返るのに対し、
+`regex:` が付くと桁が変わる。Everything の regex はインデックスを使えず
+全走査になるため。
+
+この間も **UI はブロックしない** (`Responding=True` を確認済み) が、
+Everything の IPC クエリは中断できない契約なので、実行中のクエリが終わるまで
+新しい検索は始まらない。
+
+**当初はこの間、直前に成功した結果がそのまま表示・操作できてしまっていた**
+(検索欄はもう別の条件なのに、古い行をダブルクリックで開けた)。P3 review で
+`searchStarted` を入れ、クエリ発行の時点で結果を空にして `Searching…` を出すよう
+にした。実測 (配布版・Qt を含まない `PATH`):
+
+| 時点 | 表示 |
+|---|---|
+| `a12` 入力直後 (1.2 秒後) | 行は空、`Searching…`、`Responding=True` |
+| 完了後 | `3,653 results / 7,668 ms`、全行が `a12` を含む (= 最新 query の結果だけ) |
+
+cancel / timeout / fallback は**追加していない**。Everything 側の走査時間そのものは
+変わらない (実測 7.7〜24.5 秒。ばらつきはキャッシュ状態による)。
+
+### 配布ディレクトリの実測
+
+`windeployqt --release` の出力は **51 ファイル / 54.3 MiB**。内訳の主なもの:
+
+```
+efs.exe  Everything64.dll
+Qt6Core.dll  Qt6Gui.dll  Qt6Widgets.dll  Qt6Network.dll  Qt6Svg.dll
+platforms\qwindows.dll   styles\qmodernwindowsstyle.dll
+imageformats\{qgif,qico,qjpeg,qsvg}.dll   iconengines\qsvgicon.dll
+tls\{qcertonlybackend,qschannelbackend}.dll
+networkinformation\qnetworklistmanager.dll   generic\qtuiotouchplugin.dll
+D3Dcompiler_47.dll  opengl32sw.dll  translations\qt_*.qm (31 個)
+```
+
+`Qt6Network` / `Qt6Svg` / `tls` は efs が直接使っていないが、`windeployqt` が
+必要と判断したものはそのまま入れる (**必要ファイルの authority は
+`windeployqt`**。`--no-*` で絞り込む最適化はしていない)。
+
+検証したこと:
+
+- Qt を含まない `PATH`
+  (`C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem` のみ) で
+  `dist\efs\efs.exe` が起動し、実検索・テーマ切替・終了まで動く。
+- package のコピーから `Everything64.dll` だけを外した状態でも
+  **プロセスは即死しない** (暗黙リンクではなく `LoadLibraryW` の動的ロードなので)。
+  検索すると `Search failed: Everything SDK is not available.` が
+  ステータスバーと検索欄の下に出る。検証後は clean package を再生成した。
+- `windeployqt` が見つからない / ビルドが失敗した場合は非ゼロで終わり、
+  作りかけの `dist` は残らない (実測で確認)。
+
+### 設定の永続化の実測
+
+Light テーマ + `Image` フィルタ + Regex ON にし、ウィンドウを (180,120) /
+880x520 へ動かしてから終了 → 再起動で、テーマ・タイトルバーの明暗・
+ウィンドウ位置とサイズ・列幅・種別・Regex がすべて復元された。
+**検索欄は空**で、`Image` の filter-only クエリが 1 本だけ飛んだ
+(`2,410,588 results (showing first 5,000) / 311 ms`)。
+
+保存された INI:
+
+```ini
+[General]
+settingsVersion=1
+[appearance]
+theme=light
+[search]
+kind=image
+regex=true
+sortKey=name
+sortOrder=asc
+[window]
+geometry=@ByteArray(...)
+state=@ByteArray(...)
+headerState=@ByteArray(...)
+```
 
 ## MVP の確定事項
 

@@ -20,8 +20,12 @@ QString formatModified(const QDateTime& modified)
 
 QString formatStatus(const SearchResults& results)
 {
+    // 「正常に 0 件」と「検索できなかった」を取り違えないよう、失敗は必ず
+    // "Search failed:" で始める。0 件は "0 results / N ms" のままなので、
+    // ステータスバーの文言だけで区別できる (Phase 3)。
+    // backend の詳細診断 (DLL のパス等) は qWarning へ流してあり、ここには出さない。
     if (!results.error.isEmpty())
-        return results.error;
+        return QStringLiteral("Search failed: %1").arg(results.error);
 
     const QLocale locale;
     const auto shown = static_cast<quint64>(results.rows.size());
