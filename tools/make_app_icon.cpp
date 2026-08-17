@@ -34,6 +34,10 @@ constexpr std::array<int, 4> kSizes{16, 32, 48, 256};
 // これ以上は PNG で持つ (境界は Windows の慣習に合わせる)。
 constexpr int kPngThreshold = 256;
 
+// ICONDIRENTRY と BITMAPINFOHEADER の両方で使う。32bpp 固定・プレーンは 1 枚。
+constexpr quint16 kPlanes = 1;
+constexpr quint16 kBitsPerPixel = 32;
+
 QImage render(int size)
 {
     QImage image(size, size, QImage::Format_ARGB32);
@@ -66,17 +70,26 @@ QByteArray toDib(const QImage& source)
     QDataStream out(&bytes, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::LittleEndian);
 
+    // BITMAPINFOHEADER。QDataStream へ流す値は**型付きの定数**で用意する
+    // (`quint32(0)` のような関数形式のキャストは新しい clang-tidy が
+    // C-style cast として弾く)。
+    constexpr quint32 kHeaderSize = 40;
+    constexpr quint32 kBiRgb = 0;
+    constexpr quint32 kUnused = 0;
+    constexpr qint32 kUnusedSigned = 0;
+
     // biHeight は XOR 面と AND 面の 2 枚ぶんを表す (ICO の決まり)。
-    out << quint32(40) << qint32(width) << qint32(height * 2) << quint16(1) << quint16(32)
-        << quint32(0) /* BI_RGB */ << quint32(0) << qint32(0) << qint32(0) << quint32(0)
-        << quint32(0);
+    out << kHeaderSize << static_cast<qint32>(width) << static_cast<qint32>(height * 2) << kPlanes
+        << kBitsPerPixel << kBiRgb << kUnused                   /* biSizeImage */
+        << kUnusedSigned /* biXPelsPerMeter */ << kUnusedSigned /* biYPelsPerMeter */
+        << kUnused /* biClrUsed */ << kUnused /* biClrImportant */;
 
     for (int y = height - 1; y >= 0; --y) {
         const auto* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
         for (int x = 0; x < width; ++x) {
             const QRgb pixel = line[x];
-            out << quint8(qBlue(pixel)) << quint8(qGreen(pixel)) << quint8(qRed(pixel))
-                << quint8(qAlpha(pixel));
+            out << static_cast<quint8>(qBlue(pixel)) << static_cast<quint8>(qGreen(pixel))
+                << static_cast<quint8>(qRed(pixel)) << static_cast<quint8>(qAlpha(pixel));
         }
     }
 
@@ -102,7 +115,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "usage: efs_icongen <out.ico>\n");
         return 2;
     }
-    const QString outPath = args.at(1);
+    const QString& outPath = args.at(1);
 
     QList<QByteArray> images;
     for (const int size : kSizes) {
@@ -119,8 +132,12 @@ int main(int argc, char** argv)
     QDataStream out(&ico, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::LittleEndian);
 
+    constexpr quint16 kReserved = 0;
+    constexpr quint16 kTypeIcon = 1;
+    constexpr quint8 kZero8 = 0;
+
     const auto count = static_cast<quint16>(images.size());
-    out << quint16(0) << quint16(1) /* type = icon */ << count;
+    out << kReserved << kTypeIcon << count;
 
     // 画像本体はディレクトリの直後に並ぶ。先にオフセットを積算しておく
     // (ICONDIR が 6 バイト、ICONDIRENTRY が 1 件 16 バイト)。
@@ -129,8 +146,8 @@ int main(int argc, char** argv)
         const int size = kSizes[i];
         // 256 は 0 で表す (1 バイトに入らないため)。
         const auto dimension = static_cast<quint8>(size >= 256 ? 0 : size);
-        out << dimension << dimension << quint8(0) << quint8(0) << quint16(1) << quint16(32)
-            << static_cast<quint32>(images[i].size()) << offset;
+        out << dimension << dimension << kZero8 /* colorCount */ << kZero8 /* reserved */
+            << kPlanes << kBitsPerPixel << static_cast<quint32>(images[i].size()) << offset;
         offset += static_cast<quint32>(images[i].size());
     }
     for (const QByteArray& payload : images)

@@ -116,19 +116,38 @@ pwsh scripts/package.ps1
   Qt のヘッダを解析するとアクセス違反 (0xC0000005) で落ちる。
   `VC\Tools\Llvm\x64\bin` を使うこと (`scripts/lint.ps1` がそうしている)。
 - **ローカルと CI で clang-tidy のバージョンが違う。** ローカルは VS 2022 同梱の
-  19.1.5、CI ランナーはより新しい VS 同梱版。新しい方でだけ有効な check があり、
-  **ローカルが緑でも CI が落ちることがある**。実例: `modernize-use-integer-sign-comparison`
-  は clang-tidy 20 で追加されたため 19.1.5 では検出されず、CI だけが失敗した。
+  19.1.5、CI ランナーはより新しい VS 同梱版 (2026-08 時点で **VS 18 の 22.1.3**)。
+  新しい方でだけ有効な check があり、**ローカルが緑でも CI が落ちることがある**。
+  実例 1: `modernize-use-integer-sign-comparison` は clang-tidy 20 で追加されたため
+  19.1.5 では検出されず、CI だけが失敗した。
+  実例 2: `modernize-avoid-c-style-cast` (22 で有効) は **`quint32(0)` のような
+  関数形式のキャストも C-style cast として弾く**。`QDataStream` へ数値を流すときは
+  `static_cast<T>(...)` か**型付きの定数**を使うこと (`tools/make_app_icon.cpp`
+  がそうしている)。同時に `performance-unnecessary-copy-initialization` も
+  19.1.5 より広く効く (`const QString x = list.at(i);` → 参照にする)。
   `WarningsAsErrors: '*'` なので新しい check は即エラーになる。CI が lint で
   落ちたら `pwsh scripts/lint.ps1 -ClangTidy <新しい clang-tidy のパス>` で手元に
   再現させる。スクリプトはバージョンを表示するので CI ログと突き合わせられる。
-  新しい版が手元に無ければ venv に入れるのが手軽 (システムを汚さない):
+  新しい版が手元に無ければ venv に入れるのが手軽 (システムを汚さない。
+  `.gitignore` の `.tidy*/` で無視される):
 
   ```powershell
-  python -m venv .tidy20
-  .tidy20\Scripts\pip install clang-tidy==20.1.0
-  pwsh scripts/lint.ps1 -ClangTidy .tidy20\Scripts\clang-tidy.exe
+  python -m venv .tidy22
+  .tidy22\Scripts\pip install clang-tidy==22.1.8
+  pwsh scripts/lint.ps1 -ClangTidy .tidy22\Scripts\clang-tidy.exe
   ```
+
+  **CI と同じパッチ版が PyPI に無いことがある** (CI の 22.1.3 は無く、22.1.7 /
+  22.1.8 が最寄り)。check セットはマイナー版で決まるので `22.1.x` を合わせれば
+  再現できる。利用可能な版は
+  `.tidy22\Scripts\pip index versions clang-tidy` で見る。
+  実測: 22.1.8 で `tools/make_app_icon.cpp` の CI failure を再現・修正確認した。
+
+  なお pip が `pypi.ngc.nvidia.com` へのリトライ警告を延々出すことがある
+  (NVIDIA のツールが `extra-index-url` を書いている。この環境では名前が引けない)。
+  **インストール自体は pypi.org へフォールバックして成功する**ので無視してよい。
+  黙らせるなら venv の中だけで上書きする:
+  `.tidy22\Scripts\pip config --site set global.extra-index-url ""`
 - **ビルドの並列化はプリセットに入っている。** MSBuild はターゲット内も
   ターゲット間も既定で直列に走るため、`/MP` (top-level の `add_compile_options`。
   **Visual Studio ジェネレータのときだけ**) と build プリセットの `"jobs": 0`
