@@ -17,10 +17,8 @@ function(efs_add_test name)
     # コンソールアプリであることを明示する (既定値に依存しない)。
     set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
     efs_copy_everything_dll(${name})
-
-    if(MSVC)
-        target_compile_options(${name} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
-    endif()
+    # 本体と同じ compile hygiene (定義はトップレベルの CMakeLists)。
+    efs_enable_warnings(${name})
 
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES

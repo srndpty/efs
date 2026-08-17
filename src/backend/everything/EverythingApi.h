@@ -8,7 +8,6 @@
 #pragma once
 
 #include <QString>
-#include <QStringList>
 
 #include <windows.h>
 
@@ -22,16 +21,18 @@ public:
     EverythingApi(const EverythingApi&) = delete;
     EverythingApi& operator=(const EverythingApi&) = delete;
 
-    // DLL をロードし、以下の全エントリポイントを解決する。DLL が無い、または
-    // エクスポートが1つでも解決できない場合は false を返し loadError() に理由を
-    // 残す。冪等。
+    // **exe と同階層の** Everything64.dll をロードし、以下の全エントリポイントを
+    // 解決する。そこに DLL が無い、ロードできない、エクスポートが1つでも解決
+    // できない場合は false を返し loadError() に理由を残す。冪等。
+    //
+    // **PATH / CWD へフォールバックしない。** 配置の authority はビルドと
+    // package スクリプトであり、隣に無ければ配置の失敗として明確に落とす。
     bool load();
 
     [[nodiscard]] bool isLoaded() const { return m_module != nullptr; }
     [[nodiscard]] QString loadError() const { return m_loadError; }
+    // ロードした DLL の絶対パス (= 常に exe と同階層)。診断表示用。
     [[nodiscard]] QString dllPath() const { return m_dllPath; }
-    // 直前の load() が探索した場所。診断表示用。
-    [[nodiscard]] QStringList searchedPaths() const { return m_searchedPaths; }
 
     using SetSearchW_t = void(WINAPI*)(LPCWSTR);
     using SetRegex_t = void(WINAPI*)(BOOL);
@@ -85,7 +86,6 @@ private:
     HMODULE m_module = nullptr;
     QString m_loadError;
     QString m_dllPath;
-    QStringList m_searchedPaths;
 };
 
 // Everything_GetLastError() が返す EVERYTHING_ERROR_* を読める文字列にする。

@@ -49,13 +49,23 @@ public:
     void setRegex(bool regex);
     void setSort(SortKey key, SortOrder order);
 
+    // 復元した値で即クエリを出すか、最初の明示操作まで待つか。
+    // `--tray` の隠れた起動では Deferred にする (下記)。
+    enum class InitialDispatch { Now, Deferred };
+
     // 起動時に永続化されたオプションをまとめて戻す (Phase 3 / F9)。
     //
     // setKind() / setRegex() / setSort() を順に呼ぶと 1 回の復元で最大 3 本の
     // クエリが backend へ飛ぶ。ここは 4 つの値を先に全部入れてから 1 回だけ
     // dispatch する。結果として発行されるクエリは高々 1 本 (検索欄は起動時に
     // 空なので、復元された kind が All なら 0 本 = cleared)。
-    void restoreOptions(const SearchOptions& options);
+    //
+    // Deferred では**値だけを入れてクエリを 1 本も出さない**。ログオン時の
+    // `--tray` 起動で、誰も見ていない状態のまま Image / Document のような
+    // filter-only の巨大なクエリを走らせないため (Everything 本体がまだ
+    // 起動していない時間帯に当たって、そのまま失敗表示で固まるのも避ける)。
+    void restoreOptions(const SearchOptions& options,
+                        InitialDispatch initial = InitialDispatch::Now);
 
     [[nodiscard]] SearchOptions options() const;
 

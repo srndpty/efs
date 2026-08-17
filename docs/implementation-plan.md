@@ -165,14 +165,37 @@ Everything SDK は検索パラメータをグローバル/TLS 状態として保
 
 ### デバウンスと stale 破棄 (N1/N3)
 
-1. `QLineEdit::textChanged` / フィルタ変更 / Regex 変更 / ソート変更 → `SearchController::scheduleSearch()`。
-2. 単発 `QTimer` を 120ms で再起動 (Enter キーは即時発火、デバウンスをスキップ)。
-3. 発火時に `id = ++m_nextId` を採番、`m_latestRequestId.store(id)` (`std::atomic<quint64>`)、`emit runSearch(query)`。
-4. **worker 側**: `onRunSearch` の冒頭で `if (q.id != m_latestRequestId.load()) return;` — キューに溜まった古いリクエストを実行前に捨てる。
-5. `backend->search(q)` (ブロッキング) → `emit resultsReady(results)`。
-6. **UI 側**: `results.id != m_latestRequestId` なら破棄。
+実装後の実際の名前で書く (以前ここに書いていた `scheduleSearch()` / `onRunSearch` は
+存在しない)。
 
-Everything の IPC クエリは中断できないため「実行中のクエリをキャンセルする」機構は作らない。1クエリは通常数ms〜数十msで完了し、結果を捨てるだけで十分。この判断により `CancelToken` 等の追加抽象が不要になる。
+1. `QLineEdit::textChanged` → `SearchController::setText()` (デバウンス対象)。
+   フィルタ / Regex / ソートの変更は明示操作なので `setKind()` / `setRegex()` /
+   `setSort()` から即時 `dispatch()`。起動時の復元は `restoreOptions()` が
+   4 つの値を入れてから 1 回だけ `dispatch()` する。
+2. 単発 `QTimer` を 120ms で再起動 (Enter = `searchNow()` は即時発火、デバウンスを
+   スキップ)。`setText()` は**この時点で**世代を進める (デバウンス待ちの間に
+   古い検索が完了して検索欄と食い違う結果が出るのを防ぐ)。
+3. `dispatch()` で `id = startNewGeneration()` を採番し、`searchStarted` を
+   **同期で**発火してから `emit runSearchRequested(query)`。
+4. **worker 側**: `SearchWorker::runSearch` の冒頭で
+   `if (query.id != latestRequestId()) return;` — キューに溜まった古いリクエストを
+   実行前に捨てる。
+5. `backend->search(q)` (ブロッキング) → `emit resultsReady(results)`。
+6. **UI 側**: `SearchController::onResultsReady` で `results.id != m_latestRequestId`
+   なら破棄。
+
+**キャンセルは実装しない (受容している制約)。** Everything の IPC クエリは中断
+できないため、`CancelToken` 等の追加抽象は作らず、古い結果を捨てるだけにする。
+当初ここには「1クエリは通常数ms〜数十msなので十分」と書いていたが、**それは
+filter-only の場合だけ**。実測では `Image` + Regex ON が **7.7〜24.5 秒**かかる
+(Everything 側が全走査になる。Phase 3 の実測)。したがって:
+
+- その間に別の検索を始めても、**前のクエリが終わるまで新しいクエリは走らない**。
+- 終了も同じで、重いクエリの実行中に終わらせると完了まで待たされる。
+- 表示だけは fail-closed にしてある (`searchStarted` で結果を空にし `Searching…`)。
+
+実利用でこれが本当に辛いと分かった場合に限り、Everything の非同期 IPC 等を
+独立したフェーズとして検討する。**先回りして作らない。**
 
 ### 終了処理
 
@@ -334,7 +357,7 @@ public:
 ### `QTableView` 設定
 
 ```
-setSelectionBehavior(SelectRows); setSelectionMode(ExtendedSelection);
+setSelectionBehavior(SelectRows); setSelectionMode(SingleSelection);   // ★下記
 setShowGrid(false); setAlternatingRowColors(true);
 setEditTriggers(NoEditTriggers);
 setContextMenuPolicy(CustomContextMenu);
@@ -343,6 +366,13 @@ verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);   // 行高固定 = 
 horizontalHeader()->setSectionsClickable(true);
 setSortingEnabled(false);   // ★重要
 ```
+
+**選択モードは `SingleSelection`。** 当初は `ExtendedSelection` にしていたが、
+F8 の action (Open / Show in Explorer / Copy Full Path / Copy Name) はどれも
+`currentIndex()` の 1 行だけを対象にする契約なので、複数行を選べると
+「`Ctrl+C` で選択した全パスがコピーされそう」に見えて実際には 1 行しか
+コピーされない。一括処理を実際に作るときに `ExtendedSelection` へ戻す
+(選択モードと action の対象範囲は必ず一致させる)。
 
 **`setSortingEnabled(false)` は意図的**。ソートは backend 側で行うため、`QTableView` に勝手に並べ替えさせてはならない (打ち切られた 5,000 行内だけの並べ替えになり、全体の正しい上位N件と食い違う)。代わりに `horizontalHeader()->sortIndicatorChanged` を自前で受けて `SearchController` へソート変更を通知し、再検索する。ソートインジケータは `setSortIndicator()` で手動表示。
 

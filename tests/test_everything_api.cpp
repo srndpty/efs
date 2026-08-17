@@ -3,6 +3,7 @@
 // エラーコードの写像は Everything 非依存なので常に実行する。DLL ロードと IPC
 // クエリは環境依存なので、利用できない場合は QSKIP して落とさない (CI には
 // Everything が存在しないため)。
+#include <QDir>
 #include <QtTest>
 
 #include "backend/everything/EverythingApi.h"
@@ -16,6 +17,7 @@ private slots:
     void errorTextMapsKnownCodes();
     void errorTextMapsUnknownCode();
     void loadResolvesAllEntryPoints();
+    void loadUsesOnlyTheDllBesideTheExe();
     void queryReturnsResults();
 };
 
@@ -52,6 +54,27 @@ void TestEverythingApi::loadResolvesAllEntryPoints()
     QVERIFY(api.GetNumResults != nullptr);
     QVERIFY(api.GetResultFileNameW != nullptr);
     QVERIFY(api.CleanUp != nullptr);
+}
+
+// **exe と同階層の DLL だけが authority。** PATH / CWD へフォールバックしない
+// (P4 review #1)。フォールバックが復活すると「開発機では PATH 上の別 DLL を
+// 拾って動く」という不確定性が戻るので、ロードした実体の場所を固定する。
+void TestEverythingApi::loadUsesOnlyTheDllBesideTheExe()
+{
+    const QString expected =
+        QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath())
+                                     .absoluteFilePath(QStringLiteral("Everything64.dll")));
+
+    efs::EverythingApi api;
+    if (!api.load()) {
+        // 隣に無ければロードできないこと自体が契約。理由に探索先が出ていること
+        // だけを見て skip する (PATH に居ても拾ってはならない)。
+        QVERIFY(api.loadError().contains(expected));
+        QSKIP(qPrintable(
+            QStringLiteral("Everything64.dll が exe の隣に無い: %1").arg(api.loadError())));
+    }
+
+    QCOMPARE(api.dllPath(), expected);
 }
 
 void TestEverythingApi::queryReturnsResults()

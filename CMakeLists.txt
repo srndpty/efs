@@ -46,6 +46,15 @@ function(efs_copy_everything_dll target)
         COMMENT "Everything64.dll を ${target} の隣へコピー")
 endfunction()
 
+# コンパイル時の衛生設定。efs_core / efs / efs_icongen / tests の 4 箇所で同じ
+# ものが要る (= 3 箇所目が現れた) ので関数へ寄せた。ここを足せば全ターゲットに
+# 効く — ツール類だけ警告が緩い状態を作らない。
+function(efs_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+    endif()
+endfunction()
+
 # --- efs_core -----------------------------------------------------------------
 # Qt Widgets に依存しないものはすべてここに入れる。テスト (efs_tests) が
 # リンクできる必要があるため、src/app 配下でも Widgets 非依存のクラス
@@ -95,6 +104,7 @@ target_include_directories(efs_core
 # QPixmap/QIcon 化は IconDelegate、shell lookup は ShellIcon.cpp (どちらも efs 側)。
 target_link_libraries(efs_core PUBLIC Qt6::Core Qt6::Gui)
 target_compile_definitions(efs_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+efs_enable_warnings(efs_core)
 
 # --- アプリアイコン (.ico) -----------------------------------------------------
 # Explorer やタスクバーが出すアイコンは PE のリソースなので、実行時に QPainter で
@@ -104,6 +114,7 @@ target_compile_definitions(efs_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE 
 add_executable(efs_icongen tools/make_app_icon.cpp src/app/ToolbarIcons.cpp)
 target_link_libraries(efs_icongen PRIVATE Qt6::Gui)
 target_include_directories(efs_icongen PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+efs_enable_warnings(efs_icongen)
 
 set(EFS_APP_ICON "${CMAKE_CURRENT_BINARY_DIR}/efs.ico")
 # 生成ツールの実行には Qt の DLL が要る。テスト (tests/CMakeLists.txt) と同じく
@@ -145,12 +156,7 @@ qt_add_executable(efs WIN32
 # ファイルだけが使う。
 target_link_libraries(efs PRIVATE efs_core Qt6::Widgets dwmapi shell32 ole32)
 efs_copy_everything_dll(efs)
-
-if(MSVC)
-    foreach(t efs_core efs)
-        target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
-    endforeach()
-endif()
+efs_enable_warnings(efs)
 
 if(EFS_BUILD_TESTS)
     enable_testing()

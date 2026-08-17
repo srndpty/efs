@@ -37,7 +37,17 @@ struct Settings {
 
     // 保存されていない / 壊れている項目は既定値のまま返る。
     [[nodiscard]] static Settings load();
-    void save() const;
+
+    // INI へ書き出す。**書けたことを確認して返す** (sync() → QSettings::status())。
+    // setValue() だけでは、APPDATA の権限・ディスク満杯・プロファイルの障害で
+    // 落ちたときに「保存できたつもり」になる。閉じる = 隠す なので、失敗を黙って
+    // 捨てると設定が失われ続けることに気づけない。
+    [[nodiscard]] bool save() const;
 };
+
+// 設定の実体のパス (%APPDATA%\efs\efs.ini)。保存に失敗した理由を提示するために
+// UI から使う。**QSettings を触るのは app/Settings.cpp だけ**という境界を保つため、
+// UI 側で QSettings を作らずここを通す。
+[[nodiscard]] QString settingsFilePath();
 
 } // namespace efs

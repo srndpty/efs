@@ -158,6 +158,9 @@ $hadPrevious = Test-Path $Destination
 $previousBackedUp = $false # 旧版を backup へ退避した
 $newPlaced = $false        # staging を配置先へ移した
 $shortcutsTouched = $false
+# rollback 自体が成功したか。**false のまま working dirs を消してはいけない** —
+# 消すと復旧に使える最後の正常なコピー (backup / shortcut backup) まで失われる。
+$rollbackOk = $true
 
 function Restore-Previous {
     if ($script:previousBackedUp) {
@@ -168,7 +171,24 @@ function Restore-Previous {
         }
         if (Test-Path $backup) {
             Write-Host "旧版を復元: $backup → $Destination"
-            Move-Item $backup $Destination
+            try { Move-Item $backup $Destination -ErrorAction Stop }
+            catch {
+                Write-Warning "旧版を戻せなかった: $($_.Exception.Message)"
+                $script:rollbackOk = $false
+            }
+        } else {
+            # 退避したはずの backup が無い。invariant が壊れているので、
+            # warning で流さず「復旧できていない」として扱う。
+            Write-Warning "退避した旧版が見つからない: $backup"
+            $script:rollbackOk = $false
+        }
+        # 戻した中身が起動できる形かまで見る (移動が中途半端でないこと)。
+        if ($script:rollbackOk) {
+            try { Test-InstallContents $Destination }
+            catch {
+                Write-Warning "復元した旧版が不完全: $($_.Exception.Message)"
+                $script:rollbackOk = $false
+            }
         }
     } elseif (-not $script:hadPrevious -and (Test-Path $Destination)) {
         # 初回インストールの途中で失敗した。partial を成功物として残さない。
@@ -193,11 +213,14 @@ function Restore-Previous {
             if (-not (Test-Path $saved -PathType Leaf)) { continue }
 
             New-Item -ItemType Directory -Force (Split-Path -Parent $link) | Out-Null
-            Copy-Item -Force $saved $link
+            try { Copy-Item -Force $saved $link -ErrorAction Stop } catch { }
             if (Test-Path $link -PathType Leaf) {
                 Write-Host "ショートカットを復元: $link"
             } else {
+                # 退避した .lnk があるのに戻せていない。これも復旧未完了として扱う
+                # (backup を消さずに残し、手動で戻せるようにする)。
                 Write-Warning "ショートカットを復元できなかった: $link"
+                $script:rollbackOk = $false
             }
         }
     }
@@ -280,7 +303,20 @@ try {
 } catch {
     Write-Warning "インストールに失敗した: $($_.Exception.Message)"
     Restore-Previous
-    Remove-WorkingDirs
+    # **rollback の完了を確認できたときだけ作業ディレクトリを消す。**
+    # 失敗したまま消すと、復旧に使える最後の正常なコピーごと失われる。
+    if ($rollbackOk) {
+        Remove-WorkingDirs
+    } else {
+        Write-Warning @"
+rollback を完了できなかった。**復旧用のデータは消さずに残してある。**
+  旧版 (退避):           $backup
+  ショートカット (退避): $shortcutBackupDir
+  staging:               $staging
+手動で復旧する場合は、$backup を $Destination へ移し、退避したショートカットを
+$userPrograms 配下へ戻すこと。
+"@
+    }
     throw
 }
 

@@ -150,8 +150,54 @@ SearchResults EverythingBackend::search(const SearchQuery& query)
     // totalMatches は符号なし、rows.size() は符号付き。キャストで黙らせず
     // std::cmp_greater で比較する。
     results.truncated = std::cmp_greater(results.totalMatches, results.rows.size());
+
+    // 接続先の版を確認する。**結果を読み終えた後に行う** — 版の問い合わせも IPC
+    // なので、GetResult* が指すバッファを触りうる呼び出しを間に挟まない。
+    // 初回の 1 回だけなので、対象外だったときに 1 本ぶんの読み取りが無駄になる
+    // 程度のコストで済む。
+    if (const QString unsupported = checkServerVersion(); !unsupported.isEmpty()) {
+        results.rows.clear();
+        results.totalMatches = 0;
+        results.truncated = false;
+        results.error = unsupported;
+    }
+
     results.elapsedMs = timer.elapsed();
     return results;
+}
+
+QString EverythingBackend::checkServerVersion()
+{
+    if (m_versionChecked)
+        return m_versionError;
+    m_versionChecked = true;
+
+    // 対象は 1.4 系だけ (AGENTS.md「Everything 1.5 は対象外」)。regex の引用、
+    // `<>` グルーピング、sort の意味論はどれも 1.4.1.1022 の実測で確定した契約
+    // なので、別系統の版に黙って別の意味で動かさせない。**build number は gate に
+    // しない** — 同じ 1.4 の別 build を弾く理由が無いのでログに出すだけ。
+    constexpr DWORD kSupportedMajor = 1;
+    constexpr DWORD kSupportedMinor = 4;
+
+    const DWORD major = m_api.GetMajorVersion();
+    const DWORD minor = m_api.GetMinorVersion();
+    const QString version = QStringLiteral("%1.%2.%3.%4")
+                                .arg(major)
+                                .arg(minor)
+                                .arg(m_api.GetRevision())
+                                .arg(m_api.GetBuildNumber());
+
+    if (major != kSupportedMajor || minor != kSupportedMinor) {
+        qWarning("対象外の Everything に接続した: %s (efs が対象とするのは 1.4 系のみ)",
+                 qUtf8Printable(version));
+        m_versionError =
+            QStringLiteral("Unsupported Everything version %1 (efs supports 1.4 only).")
+                .arg(version);
+        return m_versionError;
+    }
+
+    qInfo("Everything %s に接続した", qUtf8Printable(version));
+    return {};
 }
 
 } // namespace efs

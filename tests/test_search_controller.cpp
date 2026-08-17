@@ -121,6 +121,9 @@ private slots:
     void restoredFileKindIssuesAtMostOneQuery();
     void restoreDoesNotFanOutIntoMultipleQueries();
     void optionsRoundTripThroughController();
+
+    // --- P4 review: --tray の初回クエリ保留 ------------------------------------
+    void deferredRestoreIssuesNoQueryUntilSearchNow();
 };
 
 // (1) worker 側。4 要求を連射すると、実行されるのは最初と最後だけで、
@@ -835,6 +838,43 @@ void TestSearchController::optionsRoundTripThroughController()
     QCOMPARE(controller.regex(), options.regex);
     QCOMPARE(controller.sortKey(), options.sortKey);
     QCOMPARE(controller.sortOrder(), options.sortOrder);
+}
+
+// --- P4 review: `--tray` の隠れた起動では初回クエリを出さない ------------------
+//
+// ログオン時に、誰も見ていない状態で `Image` のような filter-only の巨大な
+// クエリを走らせないための契約。値は復元されるが、クエリは最初の
+// showAndActivate() (= searchNow()) まで 1 本も出ない。
+void TestSearchController::deferredRestoreIssuesNoQueryUntilSearchNow()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kDebounceMs = 20;
+    efs::SearchController controller(std::move(backend), kDebounceMs);
+    QSignalSpy startedSpy(&controller, &efs::SearchController::searchStarted);
+    QSignalSpy clearedSpy(&controller, &efs::SearchController::cleared);
+
+    efs::SearchOptions options;
+    options.kind = efs::FileKind::Image;
+    controller.restoreOptions(options, efs::SearchController::InitialDispatch::Deferred);
+
+    // 値は入っている。
+    QCOMPARE(controller.kind(), efs::FileKind::Image);
+    // クエリは 1 本も出ていない。cleared すら出さない (UI は Ready のまま)。
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(fake->queries().size(), 0);
+    QCOMPARE(startedSpy.count(), 0);
+    QCOMPARE(clearedSpy.count(), 0);
+
+    // 表示された時点で 1 本だけ出る。
+    controller.searchNow();
+    QCOMPARE(startedSpy.count(), 1);
+    QTRY_COMPARE(fake->queries().size(), 1);
+    QTest::qWait(4 * kDebounceMs);
+    QCOMPARE(fake->queries().size(), 1);
+    QCOMPARE(fake->queries().at(0).kind, efs::FileKind::Image);
 }
 
 QTEST_GUILESS_MAIN(TestSearchController)

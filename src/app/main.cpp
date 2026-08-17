@@ -78,7 +78,13 @@ int main(int argc, char** argv)
 
     // backend の選択は 1 箇所だけ。BackendFactory は 2 つ目の実装が実際に
     // 必要になる Phase 5 まで作らない。
-    efs::MainWindow window(std::make_unique<efs::EverythingBackend>(), settings);
+    // スタートアップ登録 (scripts/install.ps1) は --tray を渡す。ログオン時に
+    // ウィンドウを出さず、トレイに常駐するだけにするため。設定項目は増やさない。
+    // MainWindow へも渡す: 隠れて起動するときは復元した種別での初回クエリを
+    // 最初の表示まで保留する (誰も見ていない状態で数百万件を走らせない)。
+    const bool trayRequested = QApplication::arguments().contains(QStringLiteral("--tray"));
+
+    efs::MainWindow window(std::make_unique<efs::EverythingBackend>(), settings, trayRequested);
 
     QObject::connect(&instance, &efs::SingleInstance::showRequested, &window,
                      &efs::MainWindow::showAndActivate);
@@ -86,11 +92,8 @@ int main(int argc, char** argv)
     QObject::connect(&instance, &efs::SingleInstance::quitRequested, &window,
                      &efs::MainWindow::quitApplication);
 
-    // スタートアップ登録 (scripts/install.ps1) は --tray を渡す。ログオン時に
-    // ウィンドウを出さず、トレイに常駐するだけにするため。設定項目は増やさない。
-    // ただしトレイが使えない環境では隠れたままにしない (呼び出す手段が無くなる)。
-    const bool startHidden =
-        QApplication::arguments().contains(QStringLiteral("--tray")) && window.hasTrayIcon();
+    // トレイが使えない環境では隠れたままにしない (呼び出す手段が無くなる)。
+    const bool startHidden = trayRequested && window.hasTrayIcon();
     if (!startHidden)
         window.showAndActivate();
 

@@ -372,3 +372,36 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
 - **インストール先には何も書かない。** 設定は `%APPDATA%\efs\efs.ini` のまま。
   これを壊すと非管理者で動かなくなる (設定を exe の隣へ置く「ポータブル版」は
   作らない)。インストーラとコード署名は恒久的に作らない。
+
+### P4 review で追加した不変条件
+
+- **`Everything64.dll` の探索先は exe と同階層の絶対パス 1 つだけ。**
+  PATH / CWD へフォールバックしない (`LoadLibraryExW` +
+  `LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`)。ビルドと
+  `package.ps1` の両方が隣へ置く契約なので、無いのは配置の失敗。フォールバック
+  を戻すと「開発機では PATH 上の別 DLL を拾って動く」不確定性が復活する。
+  回帰テストは `test_everything_api.cpp` の `loadUsesOnlyTheDllBesideTheExe`。
+- **接続先の Everything の版を runtime で確認する (fail-closed)。** 版が取れるのは
+  IPC が通ってからなので、**最初に成功したクエリの直後に 1 度だけ**
+  `major.minor == 1.4` を見て、違えば以後の検索をすべて失敗させる。版の問い合わせも
+  IPC なので、**結果行を読み終えた後**に行う (`GetResult*` の間に挟まない)。
+  build number は gate にせずログだけ。
+- **`--tray` で隠して起動したときは初回クエリを出さない。**
+  `restoreOptions(options, InitialDispatch::Deferred)` で値だけ戻し、最初の
+  `showAndActivate()` で 1 本だけ発行する。ログオンのたびに見えない状態で
+  数百万件の filter-only を走らせない / Everything 本体より先に起動して
+  `Everything is not running.` のまま残るのを避ける。
+- **選択モードと action の対象範囲を食い違わせない。** 行の action は
+  `currentIndex()` の 1 行だけなので `QTableView` は `SingleSelection`。
+  一括処理を実際に作るときだけ `ExtendedSelection` へ戻す。
+- **設定は「書けたこと」を確認して初めて成功。** `Settings::save()` は
+  `sync()` → `QSettings::status()` を見て `bool` を返す。失敗はメッセージ行
+  (最優先) + トレイ通知 + `qWarning`。閉じる = 隠す なので、黙って捨てると
+  設定が失われ続けることに気づけない。`QSettings` を触るのは `app/Settings.cpp`
+  だけという境界は維持する (パスは `settingsFilePath()` 経由で取る)。
+- **rollback の完了を確認できたときだけ作業ディレクトリを消す** (`install.ps1`)。
+  旧版を戻せた / 戻した中身が必須ファイルを満たす / 退避した `.lnk` を戻せた、の
+  すべてを確認する。失敗したら staging / backup / ショートカットの退避を残し、
+  手動復旧の path を出して非ゼロで終わる。
+- **compile hygiene は `efs_enable_warnings()` の 1 箇所。** 本体・generator・
+  tests のすべてに適用する。ツール類だけ警告が緩い状態を作らない。

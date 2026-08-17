@@ -3,6 +3,7 @@
 // 実ユーザーの %APPDATA%\efs\efs.ini を壊さないよう、QStandardPaths のテスト
 // モードで書き込み先を隔離する。各テストの前に必ず clear() して「保存されて
 // いない状態」から始める。
+#include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QtTest>
@@ -31,6 +32,7 @@ private slots:
     void corruptedGeometryAndHeaderStateDoNotCrash();
     void enumsAreStoredAsStableStrings();
     void searchTextIsNotPersisted();
+    void saveReportsSuccessAndWritesTheFile();
 
     // --- Phase 4 -------------------------------------------------------------
     void hotkeyDefaultsToCtrlAltE();
@@ -85,7 +87,7 @@ void TestSettings::roundTrip()
     saved.windowGeometry = QByteArrayLiteral("\x01\x02geometry");
     saved.windowState = QByteArrayLiteral("\x03\x04state");
     saved.headerState = QByteArrayLiteral("\x05\x06header");
-    saved.save();
+    QVERIFY(saved.save());
 
     const efs::Settings loaded = efs::Settings::load();
 
@@ -112,7 +114,7 @@ void TestSettings::themeRoundTrip()
     QFETCH(efs::ThemeMode, value);
     efs::Settings saved;
     saved.theme = value;
-    saved.save();
+    QVERIFY(saved.save());
     QCOMPARE(efs::Settings::load().theme, value);
 }
 
@@ -132,7 +134,7 @@ void TestSettings::kindRoundTrip()
     QFETCH(efs::FileKind, value);
     efs::Settings saved;
     saved.options.kind = value;
-    saved.save();
+    QVERIFY(saved.save());
     QCOMPARE(efs::Settings::load().options.kind, value);
 }
 
@@ -150,7 +152,7 @@ void TestSettings::sortKeyRoundTrip()
     QFETCH(efs::SortKey, value);
     efs::Settings saved;
     saved.options.sortKey = value;
-    saved.save();
+    QVERIFY(saved.save());
     QCOMPARE(efs::Settings::load().options.sortKey, value);
 }
 
@@ -166,7 +168,7 @@ void TestSettings::sortOrderRoundTrip()
     QFETCH(efs::SortOrder, value);
     efs::Settings saved;
     saved.options.sortOrder = value;
-    saved.save();
+    QVERIFY(saved.save());
     QCOMPARE(efs::Settings::load().options.sortOrder, value);
 }
 
@@ -237,7 +239,7 @@ void TestSettings::enumsAreStoredAsStableStrings()
     saved.options.kind = efs::FileKind::Image;
     saved.options.sortKey = efs::SortKey::DateModified;
     saved.options.sortOrder = efs::SortOrder::Desc;
-    saved.save();
+    QVERIFY(saved.save());
 
     QSettings settings;
     QCOMPARE(settings.value(QStringLiteral("appearance/theme")).toString(),
@@ -255,7 +257,7 @@ void TestSettings::searchTextIsNotPersisted()
 {
     efs::Settings saved;
     saved.options.kind = efs::FileKind::Document;
-    saved.save();
+    QVERIFY(saved.save());
 
     QSettings settings;
     const QStringList keys = settings.allKeys();
@@ -284,6 +286,21 @@ void TestSettings::searchTextIsNotPersisted()
     }
 }
 
+// save() は「書けたか」を返す契約 (setValue() しただけで成功としない)。
+// 書けない状況を作るのは環境依存なので、ここでは成功側と「返り値が true なら
+// 実体のファイルが存在する」ことを固定する。
+void TestSettings::saveReportsSuccessAndWritesTheFile()
+{
+    const efs::Settings saved;
+    QVERIFY(saved.save());
+
+    const QString path = efs::settingsFilePath();
+    QVERIFY(!path.isEmpty());
+    QVERIFY(path.endsWith(QStringLiteral(".ini")));
+    // sync() を通しているので、成功を返した時点でファイルが実在する。
+    QVERIFY(QFileInfo::exists(path));
+}
+
 // --- Phase 4: グローバルホットキー --------------------------------------------
 
 void TestSettings::hotkeyDefaultsToCtrlAltE()
@@ -295,7 +312,7 @@ void TestSettings::hotkeyRoundTrip()
 {
     efs::Settings saved;
     saved.hotkey = QStringLiteral("Ctrl+Shift+F9");
-    saved.save();
+    QVERIFY(saved.save());
     QCOMPARE(efs::Settings::load().hotkey, QStringLiteral("Ctrl+Shift+F9"));
 }
 
@@ -305,7 +322,7 @@ void TestSettings::emptyHotkeyMeansDisabled()
 {
     efs::Settings saved;
     saved.hotkey.clear();
-    saved.save();
+    QVERIFY(saved.save());
 
     const efs::Settings loaded = efs::Settings::load();
     QVERIFY(loaded.hotkey.isEmpty());

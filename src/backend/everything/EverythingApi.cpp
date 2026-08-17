@@ -3,8 +3,9 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QStringList>
 
-#include <array>
+#include <string>
 
 #include "Everything.h"
 
@@ -56,46 +57,33 @@ bool EverythingApi::load()
         return true;
 
     m_loadError.clear();
-    m_searchedPaths.clear();
 
-    // 探索順: (1) exe と同階層、(2) 既定の DLL 検索順序 (PATH)。
-    const QString beside = QDir(QCoreApplication::applicationDirPath())
-                               .absoluteFilePath(QStringLiteral("Everything64.dll"));
-    m_searchedPaths << QDir::toNativeSeparators(beside)
-                    << QStringLiteral("<default DLL search order / PATH>");
+    // **探索先は exe と同階層の絶対パス 1 つだけ。PATH へフォールバックしない。**
+    // ビルド (CMake の efs_copy_everything_dll) と配布 (scripts/package.ps1) の
+    // どちらも DLL を exe の隣へ必ず置く契約なので、そこに無いのは配置の失敗。
+    // CWD / PATH 上の別の Everything64.dll を拾って「環境によって動いたり
+    // 動かなかったりする」状態を作るより、明確に失敗して理由を出す方が良い
+    // (AGENTS.md「フォールバック・互換性は最小」)。
+    const QString path =
+        QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath())
+                                     .absoluteFilePath(QStringLiteral("Everything64.dll")));
 
-    QString attemptedError;
-    if (QFileInfo::exists(beside)) {
-        const std::wstring w = QDir::toNativeSeparators(beside).toStdWString();
-        m_module = ::LoadLibraryW(w.c_str());
-        if (m_module) {
-            m_dllPath = QDir::toNativeSeparators(beside);
-        } else {
-            attemptedError = QStringLiteral("%1: %2").arg(QDir::toNativeSeparators(beside),
-                                                          formatWin32Error(::GetLastError()));
-        }
-    } else {
-        attemptedError =
-            QStringLiteral("%1: ファイルが存在しない").arg(QDir::toNativeSeparators(beside));
-    }
-
-    if (!m_module) {
-        m_module = ::LoadLibraryW(L"Everything64.dll");
-        if (m_module) {
-            std::array<wchar_t, MAX_PATH> path{};
-            if (::GetModuleFileNameW(m_module, path.data(), MAX_PATH))
-                m_dllPath = QString::fromWCharArray(path.data());
-            else
-                m_dllPath = QStringLiteral("Everything64.dll");
-        }
-    }
-
-    if (!m_module) {
-        m_loadError = QStringLiteral("Everything64.dll をロードできない。%1 / "
-                                     "PATH 上にも見つからない: %2")
-                          .arg(attemptedError, formatWin32Error(::GetLastError()));
+    if (!QFileInfo::exists(path)) {
+        m_loadError = QStringLiteral("Everything64.dll が exe と同階層に無い: %1").arg(path);
         return false;
     }
+
+    // 絶対パスで指定した上で検索順序も限定する。依存 DLL の解決先を system32 と
+    // DLL 自身のディレクトリに限り、PATH 上の同名 DLL を巻き込まない。
+    const std::wstring wide = path.toStdWString();
+    m_module = ::LoadLibraryExW(wide.c_str(), nullptr,
+                                LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+    if (!m_module) {
+        m_loadError =
+            QStringLiteral("%1 をロードできない: %2").arg(path, formatWin32Error(::GetLastError()));
+        return false;
+    }
+    m_dllPath = path;
 
     QStringList missing;
     resolve(m_module, "Everything_SetSearchW", SetSearchW, missing);
