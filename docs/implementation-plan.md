@@ -394,7 +394,8 @@ struct Settings {
 
 - 設定ダイアログは MVP では作らない。UI で触れるのはテーマ切替 (ツールバー右端のトグル) のみ。それ以外は INI を直接編集。自分専用ツールなので設定 UI に工数を割かない。
 - `windowGeometry`/`headerState` は `QMainWindow::saveGeometry()` / `QHeaderView::saveState()` の QByteArray をそのまま保存 (自前でジオメトリを分解しない)。
-- 保存タイミングは `closeEvent` の1回のみ。
+- 保存タイミングは `closeEvent` の1回のみ (**Phase 4 で 2 本になった** — 閉じる =
+  隠す になったため、`closeEvent` と `quitApplication()` の両方で保存する)。
 
 ---
 
@@ -596,8 +597,10 @@ Everything の自動起動 / Everything 1.5 対応。
 - **多重起動防止に Qt Network は使わない。** 名前付き mutex (`Local\` 名前空間 =
   セッション単位) と `RegisterWindowMessageW` のブロードキャストで足りる。
   `QLocalServer` のためだけに Qt のモジュールを増やさない。
-- **設定の保存経路が 2 本になった。** 閉じる = 終了ではなくなったので、
-  `closeEvent` (隠す前) と トレイの Quit の両方から `saveSettings()` を呼ぶ。
+- **設定を保存するコード経路が 2 本になった。** 閉じる = 終了ではなくなったので、
+  `closeEvent` (隠す前) と `MainWindow::quitApplication()` の両方から
+  `saveSettings()` を呼ぶ。`quitApplication()` の caller はトレイの Quit と
+  `--quit` IPC の 2 つで、終了処理そのものはこの 1 本だけ。
   片方だけにすると、その経路で終わったときだけ設定が飛ぶ。
 **P4 review で追加した修正**
 
@@ -630,7 +633,11 @@ Everything の自動起動 / Everything 1.5 対応。
    `--quit` の前提そのもので、判定できないまま起動を許すと efs が複数常駐しうる。
 8. **同じ修飾キーの重複を invalid にした (final review)。**
    `Ctrl+Ctrl+E` / `Ctrl+Control+E` / `Meta+Win+K` を 1 つに畳まない。
-9. **exe のアイコン (Explorer 表示)。** シェルが出すアイコンは PE リソース
+9. **ショートカットの復元を型まで保証した (final cleanup)。** 退避対象は `.lnk`
+   ファイル (Leaf) だけと明示し、復元は「型を問わず取り除く → コピー → Leaf で
+   あることを確認」に変えた。`Copy-Item -Force` の上書きに頼ると、復元先が
+   ディレクトリのときに中へコピーされて `.lnk` が戻らない。
+10. **exe のアイコン (Explorer 表示)。** シェルが出すアイコンは PE リソース
    なので、実行時に `QPainter` で描く方式では出せない。図形の定義を 2 箇所に
    持たないよう、`.ico` はコミットせず**同じ `paintAppIcon()` を呼ぶ
    `tools/make_app_icon.cpp` がビルド時に生成**し、`src/app/efs.rc.in` 経由で

@@ -14,12 +14,14 @@
 
 #include <QBuffer>
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QDataStream>
 #include <QFile>
 #include <QImage>
 #include <QList>
 #include <QPainter>
 #include <QString>
+#include <QStringList>
 #include <Qt>
 
 #include <array>
@@ -91,10 +93,16 @@ QByteArray toDib(const QImage& source)
 
 int main(int argc, char** argv)
 {
-    if (argc != 2) {
+    // 出力先のパスは argv から直接読まず QCoreApplication::arguments() を使う。
+    // Windows では Qt が Unicode のコマンドラインから組み立てるので、非 ASCII を
+    // 含むビルドディレクトリでも壊れない (argv は現在のコードページ止まり)。
+    const QCoreApplication app(argc, argv);
+    const QStringList args = QCoreApplication::arguments();
+    if (args.size() != 2) {
         std::fprintf(stderr, "usage: efs_icongen <out.ico>\n");
         return 2;
     }
+    const QString outPath = args.at(1);
 
     QList<QByteArray> images;
     for (const int size : kSizes) {
@@ -128,14 +136,14 @@ int main(int argc, char** argv)
     for (const QByteArray& payload : images)
         out.writeRawData(payload.constData(), static_cast<int>(payload.size()));
 
-    QFile file(QString::fromLocal8Bit(argv[1]));
+    QFile file(outPath);
     if (!file.open(QIODevice::WriteOnly)) {
-        std::fprintf(stderr, "efs_icongen: %s を開けない: %s\n", argv[1],
+        std::fprintf(stderr, "efs_icongen: %s を開けない: %s\n", qUtf8Printable(outPath),
                      qUtf8Printable(file.errorString()));
         return 1;
     }
     if (file.write(ico) != ico.size()) {
-        std::fprintf(stderr, "efs_icongen: %s へ書き切れなかった\n", argv[1]);
+        std::fprintf(stderr, "efs_icongen: %s へ書き切れなかった\n", qUtf8Printable(outPath));
         return 1;
     }
     return 0;

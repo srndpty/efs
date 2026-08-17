@@ -179,15 +179,25 @@ function Restore-Previous {
         Write-Warning "配置済みの新版を取り消した。"
     }
     # ショートカットも触った分だけ戻す (元が無かったものは消す)。
+    # **復元先に何が居ても、まず型を問わず取り除いてから戻す。** ここは efs の
+    # ショートカット専用の path なので、.lnk 以外の object (ディレクトリ等) が
+    # 居座っているのは異常であり、残す理由が無い。Copy-Item を上書きに頼ると、
+    # 相手がディレクトリのときに「その中へコピー」になって .lnk file が復元
+    # されない。
     if ($script:shortcutsTouched) {
         foreach ($link in @($startMenuLink, $startupLink)) {
             $saved = Join-Path $shortcutBackupDir (Split-Path -Leaf (Split-Path -Parent $link))
             $saved = Join-Path $saved (Split-Path -Leaf $link)
-            if (Test-Path $saved) {
-                New-Item -ItemType Directory -Force (Split-Path -Parent $link) | Out-Null
-                Copy-Item -Force $saved $link
-            } elseif (Test-Path $link) {
-                Remove-Item -Force $link -ErrorAction SilentlyContinue
+
+            if (Test-Path $link) { Remove-Item -Recurse -Force $link -ErrorAction SilentlyContinue }
+            if (-not (Test-Path $saved -PathType Leaf)) { continue }
+
+            New-Item -ItemType Directory -Force (Split-Path -Parent $link) | Out-Null
+            Copy-Item -Force $saved $link
+            if (Test-Path $link -PathType Leaf) {
+                Write-Host "ショートカットを復元: $link"
+            } else {
+                Write-Warning "ショートカットを復元できなかった: $link"
             }
         }
     }
@@ -229,9 +239,12 @@ try {
 
     # 5. ショートカット。ここで失敗しても rollback 対象にするため、既存の
     #    .lnk を先に退避しておく。
+    #    **退避するのは .lnk file (Leaf) だけ。** その path にディレクトリ等が
+    #    居る場合は「正常な既存ショートカット」とは扱わず、退避もしない
+    #    (戻すべき中身が無いため)。rollback ではその object を取り除いて終わる。
     New-Item -ItemType Directory -Force (Split-Path -Parent $startupLink) | Out-Null
     foreach ($link in @($startMenuLink, $startupLink)) {
-        if (Test-Path $link) {
+        if (Test-Path $link -PathType Leaf) {
             $savedDir = Join-Path $shortcutBackupDir (Split-Path -Leaf (Split-Path -Parent $link))
             New-Item -ItemType Directory -Force $savedDir | Out-Null
             Copy-Item -Force $link (Join-Path $savedDir (Split-Path -Leaf $link))
