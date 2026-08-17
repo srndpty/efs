@@ -158,6 +158,9 @@ $hadPrevious = Test-Path $Destination
 $previousBackedUp = $false # 旧版を backup へ退避した
 $newPlaced = $false        # staging を配置先へ移した
 $shortcutsTouched = $false
+# rollback 自体が成功したか。**false のまま working dirs を消してはいけない** —
+# 消すと復旧に使える最後の正常なコピー (backup / shortcut backup) まで失われる。
+$rollbackOk = $true
 
 function Restore-Previous {
     if ($script:previousBackedUp) {
@@ -168,12 +171,37 @@ function Restore-Previous {
         }
         if (Test-Path $backup) {
             Write-Host "旧版を復元: $backup → $Destination"
-            Move-Item $backup $Destination
+            try { Move-Item $backup $Destination -ErrorAction Stop }
+            catch {
+                Write-Warning "旧版を戻せなかった: $($_.Exception.Message)"
+                $script:rollbackOk = $false
+            }
+        } else {
+            # 退避したはずの backup が無い。invariant が壊れているので、
+            # warning で流さず「復旧できていない」として扱う。
+            Write-Warning "退避した旧版が見つからない: $backup"
+            $script:rollbackOk = $false
+        }
+        # 戻した中身が起動できる形かまで見る (移動が中途半端でないこと)。
+        if ($script:rollbackOk) {
+            try { Test-InstallContents $Destination }
+            catch {
+                Write-Warning "復元した旧版が不完全: $($_.Exception.Message)"
+                $script:rollbackOk = $false
+            }
         }
     } elseif (-not $script:hadPrevious -and (Test-Path $Destination)) {
         # 初回インストールの途中で失敗した。partial を成功物として残さない。
+        # **削除できたことまで確認する。** ACL / ロックで消せないと partial が
+        # 「インストール済み」として残るので、旧版ありの経路と同じく rollback
+        # 失敗として扱い、recovery data を消さずに終わる。
         Write-Host "配置途中の $Destination を削除 (初回インストール)"
-        Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
+        try { Remove-Item -Recurse -Force $Destination -ErrorAction Stop }
+        catch { Write-Warning "配置途中の $Destination を削除できなかった: $($_.Exception.Message)" }
+        if (Test-Path $Destination) {
+            Write-Warning "配置途中の $Destination が残っている。"
+            $script:rollbackOk = $false
+        }
     }
     if ($script:newPlaced) {
         Write-Warning "配置済みの新版を取り消した。"
@@ -193,11 +221,14 @@ function Restore-Previous {
             if (-not (Test-Path $saved -PathType Leaf)) { continue }
 
             New-Item -ItemType Directory -Force (Split-Path -Parent $link) | Out-Null
-            Copy-Item -Force $saved $link
+            try { Copy-Item -Force $saved $link -ErrorAction Stop } catch { }
             if (Test-Path $link -PathType Leaf) {
                 Write-Host "ショートカットを復元: $link"
             } else {
+                # 退避した .lnk があるのに戻せていない。これも復旧未完了として扱う
+                # (backup を消さずに残し、手動で戻せるようにする)。
                 Write-Warning "ショートカットを復元できなかった: $link"
+                $script:rollbackOk = $false
             }
         }
     }
@@ -280,7 +311,33 @@ try {
 } catch {
     Write-Warning "インストールに失敗した: $($_.Exception.Message)"
     Restore-Previous
-    Remove-WorkingDirs
+    # **rollback の完了を確認できたときだけ作業ディレクトリを消す。**
+    # 失敗したまま消すと、復旧に使える最後の正常なコピーごと失われる。
+    if ($rollbackOk) {
+        Remove-WorkingDirs
+    } else {
+        # 何が残っているかは失敗した境界で違う (初回インストールなら backup は
+        # 無い)。**実在するものだけを挙げる** — 無い path を「ここから戻せる」と
+        # 書くと復旧の手がかりとして嘘になる。
+        $left = @()
+        if (Test-Path $backup) { $left += "  旧版 (退避):           $backup" }
+        if (Test-Path $shortcutBackupDir) { $left += "  ショートカット (退避): $shortcutBackupDir" }
+        if (Test-Path $staging) { $left += "  staging:               $staging" }
+        if (Test-Path $Destination) { $left += "  配置先 (中途半端):     $Destination" }
+        $leftText = if ($left.Count -gt 0) { $left -join "`n" } else { '  (残っているものは無い)' }
+        # 手順も状況に合わせる。旧版が無い初回インストールで「旧版を戻せ」と
+        # 出すのは案内として嘘になる。
+        $howTo = if (Test-Path $backup) {
+            "手動で復旧する場合は、$backup を $Destination へ移し、退避した`nショートカットを $userPrograms 配下へ戻すこと。"
+        } else {
+            "旧版は無い (初回インストール)。中途半端な $Destination を手動で削除すること。"
+        }
+        Write-Warning @"
+rollback を完了できなかった。**復旧用のデータは消さずに残してある。**
+$leftText
+$howTo
+"@
+    }
     throw
 }
 

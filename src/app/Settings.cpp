@@ -151,7 +151,7 @@ Settings Settings::load()
     return loaded;
 }
 
-void Settings::save() const
+bool Settings::save() const
 {
     QSettings settings;
 
@@ -171,6 +171,16 @@ void Settings::save() const
 
     // 検索文字列・検索履歴・最近の query・結果行は**保存しない**。
     // 検索文字列の永続化は search history と意味が混ざるため Phase 3 では行わない。
+
+    // ここまでは QSettings のメモリ上の状態を変えただけ。実際にファイルへ書いて
+    // から結果を見る (デストラクタの暗黙の sync では成否を拾えない)。
+    settings.sync();
+    return settings.status() == QSettings::NoError;
+}
+
+QString settingsFilePath()
+{
+    return QSettings().fileName();
 }
 
 } // namespace efs

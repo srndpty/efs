@@ -104,6 +104,16 @@ SearchResults EverythingBackend::search(const SearchQuery& query)
         return results;
     }
 
+    // 対象外の版だと**すでに分かっている**なら、クエリを投げずに落とす。
+    // 判定は最初の成功クエリの後にしか行えない (下記) が、一度確定した後は
+    // 毎回 5,000 件を読んでから捨てるのは無駄でしかない — Regex なら 1 回
+    // 7.7〜24.5 秒 (README の実測) を待つことになる。
+    if (m_versionChecked && !m_versionError.isEmpty()) {
+        results.error = m_versionError;
+        results.elapsedMs = timer.elapsed();
+        return results;
+    }
+
     const std::wstring queryString = buildQueryString(query).toStdWString();
     m_api.SetSearchW(queryString.c_str());
     // 正規表現はクエリ文字列内の regex: 項で表現する (Phase 0 で確定)。
@@ -150,8 +160,68 @@ SearchResults EverythingBackend::search(const SearchQuery& query)
     // totalMatches は符号なし、rows.size() は符号付き。キャストで黙らせず
     // std::cmp_greater で比較する。
     results.truncated = std::cmp_greater(results.totalMatches, results.rows.size());
+
+    // 接続先の版を確認する。**結果を読み終えた後に行う** — 版の問い合わせも IPC
+    // なので、GetResult* が指すバッファを触りうる呼び出しを間に挟まない。
+    // 初回の 1 回だけなので、対象外だったときに 1 本ぶんの読み取りが無駄になる
+    // 程度のコストで済む。
+    if (const QString unsupported = checkServerVersion(); !unsupported.isEmpty()) {
+        results.rows.clear();
+        results.totalMatches = 0;
+        results.truncated = false;
+        results.error = unsupported;
+    }
+
     results.elapsedMs = timer.elapsed();
     return results;
+}
+
+QString EverythingBackend::checkServerVersion()
+{
+    // 判定が確定しているならそれを返す。**確定するのは有効な版が取れたときだけ**
+    // (下記)。
+    if (m_versionChecked)
+        return m_versionError;
+
+    // 対象は 1.4 系だけ (AGENTS.md「Everything 1.5 は対象外」)。regex の引用、
+    // `<>` グルーピング、sort の意味論はどれも 1.4.1.1022 の実測で確定した契約
+    // なので、別系統の版に黙って別の意味で動かさせない。**build number は gate に
+    // しない** — 同じ 1.4 の別 build を弾く理由が無いのでログに出すだけ。
+    constexpr DWORD kSupportedMajor = 1;
+    constexpr DWORD kSupportedMinor = 4;
+
+    const DWORD major = m_api.GetMajorVersion();
+    const DWORD minor = m_api.GetMinorVersion();
+    const QString version = QStringLiteral("%1.%2.%3.%4")
+                                .arg(major)
+                                .arg(minor)
+                                .arg(m_api.GetRevision())
+                                .arg(m_api.GetBuildNumber());
+
+    // 版が取れない (major = 0) のは「対象外の版」ではなく **IPC が通っていない**
+    // — クエリ成功と版の問い合わせの間に Everything が落ちた場合など。これを
+    // latch すると、Everything を起こし直しても永久に `Unsupported …` のままに
+    // なる。この検索だけ失敗させ、判定は次回やり直す。
+    if (major == 0) {
+        qWarning("Everything の版を取得できなかった (%s)。判定は次回やり直す",
+                 qUtf8Printable(version));
+        return searchErrorText(EVERYTHING_ERROR_IPC);
+    }
+
+    // ここから先は確定してよい。
+    m_versionChecked = true;
+
+    if (major != kSupportedMajor || minor != kSupportedMinor) {
+        qWarning("対象外の Everything に接続した: %s (efs が対象とするのは 1.4 系のみ)",
+                 qUtf8Printable(version));
+        m_versionError =
+            QStringLiteral("Unsupported Everything version %1 (efs supports 1.4 only).")
+                .arg(version);
+        return m_versionError;
+    }
+
+    qInfo("Everything %s に接続した", qUtf8Printable(version));
+    return {};
 }
 
 } // namespace efs

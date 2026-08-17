@@ -91,7 +91,7 @@ void SearchController::setSort(SortKey key, SortOrder order)
     dispatch();
 }
 
-void SearchController::restoreOptions(const SearchOptions& options)
+void SearchController::restoreOptions(const SearchOptions& options, InitialDispatch initial)
 {
     // 値を全部入れてから 1 回だけ dispatch する。個々の setter を呼ぶと
     // 復元だけで最大 3 本のクエリが飛ぶ。
@@ -99,7 +99,10 @@ void SearchController::restoreOptions(const SearchOptions& options)
     m_query.regex = options.regex;
     m_query.sortKey = options.sortKey;
     m_query.sortOrder = options.sortOrder;
-    dispatch();
+    // Deferred は「値は戻したがクエリは出さない」。UI が実際に見えるようになった
+    // 時点で searchNow() を呼ぶ (MainWindow::showAndActivate)。
+    if (initial == InitialDispatch::Now)
+        dispatch();
 }
 
 SearchOptions SearchController::options() const

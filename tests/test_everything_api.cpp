@@ -3,6 +3,7 @@
 // エラーコードの写像は Everything 非依存なので常に実行する。DLL ロードと IPC
 // クエリは環境依存なので、利用できない場合は QSKIP して落とさない (CI には
 // Everything が存在しないため)。
+#include <QDir>
 #include <QtTest>
 
 #include "backend/everything/EverythingApi.h"
@@ -16,6 +17,7 @@ private slots:
     void errorTextMapsKnownCodes();
     void errorTextMapsUnknownCode();
     void loadResolvesAllEntryPoints();
+    void successfulLoadCameFromTheDllBesideTheExe();
     void queryReturnsResults();
 };
 
@@ -52,6 +54,32 @@ void TestEverythingApi::loadResolvesAllEntryPoints()
     QVERIFY(api.GetNumResults != nullptr);
     QVERIFY(api.GetResultFileNameW != nullptr);
     QVERIFY(api.CleanUp != nullptr);
+}
+
+// **exe と同階層の DLL だけが authority** (P4 review #1) の**成功側だけ**を
+// 固定する。CMake が test exe の隣へ DLL をコピーしているので、ここで言えるのは
+// 「ロードに成功したなら、それは隣の DLL だった」まで。
+//
+// **これは negative test ではない。** 「exe の隣に無く PATH に居るときは
+// ロードしない」を本当に固定するには、DLL を除いた temp ディレクトリへ exe を
+// 置き、PATH に別の Everything64.dll を積んだ subprocess を起動する必要がある。
+// それは再実行可能な process smoke (review #10) と一緒に入れる。
+void TestEverythingApi::successfulLoadCameFromTheDllBesideTheExe()
+{
+    const QString expected =
+        QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath())
+                                     .absoluteFilePath(QStringLiteral("Everything64.dll")));
+
+    efs::EverythingApi api;
+    if (!api.load()) {
+        // 隣に無ければロードできないこと自体が契約。理由に探索先が出ていること
+        // だけを見て skip する (PATH に居ても拾ってはならない)。
+        QVERIFY(api.loadError().contains(expected));
+        QSKIP(qPrintable(
+            QStringLiteral("Everything64.dll が exe の隣に無い: %1").arg(api.loadError())));
+    }
+
+    QCOMPARE(api.dllPath(), expected);
 }
 
 void TestEverythingApi::queryReturnsResults()

@@ -107,7 +107,8 @@ int sortKeyToColumn(SortKey key)
 
 } // namespace
 
-MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings settings, QWidget* parent)
+MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings settings,
+                       bool trayRequested, QWidget* parent)
     : QMainWindow(parent), m_settings(std::move(settings))
 {
     setWindowTitle(QStringLiteral("efs"));
@@ -144,7 +145,18 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
     // 順に呼ぶと復元だけで最大 3 本のクエリが飛ぶ。検索欄は起動時に空なので、
     // 発行されるのは「復元された kind が All 以外」のときの 1 本だけ
     // (All なら 0 本 = cleared)。
-    m_controller->restoreOptions(m_settings.options);
+    //
+    // ただし `--tray` の隠れた起動では**クエリを 1 本も出さない**。ログオンの
+    // たびに、見えない状態で `Image` / `Document` の filter-only (数百万件) を
+    // 走らせても誰も見ていないうえ、Everything 本体より先に起動すると
+    // `Everything is not running.` のまま固まる。初回クエリは最初に
+    // showAndActivate() が呼ばれた時点へ回す。
+    // トレイの可否は buildTrayIcon() と同じ静的判定を使う (ここは ctor の
+    // 途中で m_tray がまだ無い)。
+    m_initialSearchPending = trayRequested && QSystemTrayIcon::isSystemTrayAvailable();
+    m_controller->restoreOptions(
+        m_settings.options, m_initialSearchPending ? SearchController::InitialDispatch::Deferred
+                                                   : SearchController::InitialDispatch::Now);
 
     buildTable();
     buildToolBar();
@@ -220,6 +232,13 @@ void MainWindow::showAndActivate()
     // 呼び出し直後にそのまま打ち始められるようにする。
     m_searchEdit->setFocus();
     m_searchEdit->selectAll();
+
+    // `--tray` で保留していた初回クエリはここで 1 回だけ出す。復元された種別が
+    // All なら searchNow() は cleared を出すだけで、クエリは飛ばない。
+    if (m_initialSearchPending) {
+        m_initialSearchPending = false;
+        m_controller->searchNow();
+    }
 }
 
 void MainWindow::quitApplication()
@@ -251,7 +270,21 @@ void MainWindow::saveSettings()
     m_settings.windowGeometry = saveGeometry();
     m_settings.windowState = saveState();
     m_settings.headerState = m_tableView->horizontalHeader()->saveState();
-    m_settings.save();
+
+    // 書けなかったことを成功として流さない。APPDATA の権限・ディスク満杯・
+    // プロファイルの障害では「閉じたから保存された」と思ったまま設定が失われる。
+    if (m_settings.save()) {
+        m_saveError.clear();
+    } else {
+        m_saveError = QStringLiteral("Failed to save settings to %1.").arg(settingsFilePath());
+        qWarning("設定を保存できない: %s", qUtf8Printable(settingsFilePath()));
+        // 終了経路から呼ばれた場合はもう誰も見ないが、閉じる = 隠す の経路では
+        // 次に開いたときにこの 1 行が残っている。
+        if (m_tray != nullptr) {
+            m_tray->showMessage(QStringLiteral("efs"), m_saveError, QSystemTrayIcon::Warning);
+        }
+    }
+    updateMessage();
 }
 
 void MainWindow::buildToolBar()
@@ -360,7 +393,12 @@ void MainWindow::buildTable()
     m_tableView = new QTableView(this);
     m_tableView->setModel(m_model);
     m_tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_tableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    // **SingleSelection。** Open / Show in Explorer / Copy Full Path / Copy Name は
+    // どれも currentIndex() の 1 行だけを対象にする契約なので、複数行を選べる
+    // ままにすると「Ctrl+C で選択した全パスがコピーされそう」に見えて実際には
+    // 1 行しかコピーされない。一括処理を実際に作るときに ExtendedSelection へ
+    // 戻す (選択モードと action の対象範囲は必ず一致させる)。
+    m_tableView->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tableView->setShowGrid(false);
     m_tableView->setAlternatingRowColors(true);
@@ -557,10 +595,13 @@ void MainWindow::updateRegexValidation()
 
 void MainWindow::updateMessage()
 {
-    // backend error を優先する。両方出しても行が増えるだけで判断は変わらない。
-    // ホットキーの警告は起動時に 1 度出るだけなので優先度は最も低い。
+    // 設定を保存できなかったことが最優先 (検索は続けられるが、放っておくと
+    // 設定が失われ続ける)。次に backend error。両方出しても行が増えるだけで
+    // 判断は変わらない。ホットキーの警告は起動時に 1 度出るだけなので最も低い。
     QString text;
-    if (!m_backendError.isEmpty())
+    if (!m_saveError.isEmpty())
+        text = m_saveError;
+    else if (!m_backendError.isEmpty())
         text = QStringLiteral("Search failed: %1").arg(m_backendError);
     else if (!m_regexWarning.isEmpty())
         text = m_regexWarning;
