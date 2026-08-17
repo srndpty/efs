@@ -157,13 +157,13 @@ QIcon themeIcon(const QColor& ink)
     return {pixmap};
 }
 
-QIcon appIcon()
+void paintAppIcon(QPainter& painter, int size)
 {
-    QPixmap pixmap(kSize, kSize);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
+    painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
+    // 図形は他のアイコンと同じ 64 単位の座標系で書き、描画先の大きさへ拡縮する。
+    // 16px の .ico から 256px の Explorer 表示まで同じ 1 つの定義で賄うため。
+    painter.scale(size / static_cast<qreal>(kSize), size / static_cast<qreal>(kSize));
 
     // 地。トレイの背景が明るくても暗くても輪郭が出るよう、濃い円を敷く。
     painter.setPen(Qt::NoPen);
@@ -178,6 +178,16 @@ QIcon appIcon()
     painter.setBrush(Qt::NoBrush);
     painter.drawEllipse(QPointF(27, 27), 13, 13);
     painter.drawLine(QPointF(37, 37), QPointF(48, 48));
+    painter.restore();
+}
+
+QIcon appIcon()
+{
+    QPixmap pixmap(kSize, kSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    paintAppIcon(painter, kSize);
     painter.end();
 
     return {pixmap};

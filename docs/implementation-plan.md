@@ -618,6 +618,12 @@ Everything の自動起動 / Everything 1.5 対応。
    `RegisterWindowMessageW` の失敗も同じ infrastructure error として扱う。
 5. **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等を invalid に)。
    `Qt::SkipEmptyParts` をやめ、table-driven の回帰テストを追加した。
+6. **exe のアイコン (Explorer 表示)。** シェルが出すアイコンは PE リソース
+   なので、実行時に `QPainter` で描く方式では出せない。図形の定義を 2 箇所に
+   持たないよう、`.ico` はコミットせず**同じ `paintAppIcon()` を呼ぶ
+   `tools/make_app_icon.cpp` がビルド時に生成**し、`src/app/efs.rc.in` 経由で
+   埋め込む。ICO の書き出しは手書き (Qt の ICO ハンドラは 1 画像しか書けず、
+   複数サイズを 1 ファイルに収められない)。
 
 - deviation (計画との差分):
   1. `QApplication::setQuitOnLastWindowClosed(false)` を入れた副作用として、

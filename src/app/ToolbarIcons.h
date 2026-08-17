@@ -10,6 +10,7 @@
 
 class QColor;
 class QIcon;
+class QPainter;
 
 namespace efs {
 
@@ -26,5 +27,11 @@ namespace efs {
 // トレイの地は OS のテーマ次第で明暗どちらもありうるので、単色の線画ではなく
 // 塗りつぶした円の上に描いて、どちらの地でも視認できるようにする。
 [[nodiscard]] QIcon appIcon();
+
+// アプリアイコンの図形の**唯一の定義**。size × size の正方形へ描く。
+// 実行時の appIcon() と、Explorer 用に exe へ埋め込む .ico (tools/make_app_icon.cpp
+// がビルド時に生成する) の両方がここを通る。**片方だけ描き変えないこと。**
+// QPixmap を作らないので QGuiApplication 無しでも呼べる (生成ツールがそうする)。
+void paintAppIcon(QPainter& painter, int size);
 
 } // namespace efs

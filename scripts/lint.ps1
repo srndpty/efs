@@ -50,12 +50,14 @@ if (-not (Test-Path $compileDb)) {
     throw "compile_commands.json が無い: $compileDb`nNinja プリセットで先にビルドすること (cmake --build --preset ninja-x64-debug)。"
 }
 
-# lint 対象は src 配下だけ。third_party と tests は対象外 (.clang-tidy の
+# lint 対象は src と tools。third_party と tests は対象外 (.clang-tidy の
 # HeaderFilterRegex も src 配下のヘッダに限定している)。
-$files = @(Get-ChildItem -Path (Join-Path $repo 'src') -Recurse -Include *.cpp -File |
+# tools\make_app_icon.cpp は製品コードではないが、生成する .ico は出荷物なので
+# 同じ基準で検査する。
+$files = @(Get-ChildItem -Path (Join-Path $repo 'src'), (Join-Path $repo 'tools') -Recurse -Include *.cpp -File |
     ForEach-Object { $_.FullName })
 if ($files.Count -eq 0) {
-    throw "src 配下に *.cpp が無い。"
+    throw "src / tools 配下に *.cpp が無い。"
 }
 
 $version = (& $ClangTidy --version | Select-String 'LLVM version').ToString().Trim()

@@ -83,6 +83,7 @@ MSBuild は既定で **ターゲット内も、ターゲット間も直列**に�
 |---|---|
 | `efs_core` | 静的ライブラリ。Qt Widgets に依存しないものすべて (core / backend / 検索スレッド / テーブルモデル) |
 | `efs` | WIN32 GUI 実行ファイル。`MainWindow` と `main()` だけを持つ |
+| `efs_icongen` | ビルド時に `efs.ico` を生成するだけのツール (下の「アプリアイコン」)。出荷物ではない |
 | `test_*` | QtTest。1 ファイル 1 実行ファイルで `ctest` に登録 (`test_query_builder` / `test_formatting` / `test_path_utils` / `test_result_model` / `test_search_controller` / `test_settings` / `test_regex_validation` / `test_icon_cache` / `test_hotkey_spec` / `test_everything_api` / `test_everything_backend`) |
 
 QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けないため、テストは
@@ -278,6 +279,28 @@ Name 列に Windows のファイル種別アイコンを出す。
   another application).` と 1 行出すだけ (modal は出さない)。backend error と
   Regex 警告の方が「今の操作」に近いので、表示の優先度はこれが最も低い。
 
+### アプリアイコン
+
+ウィンドウ / タスクトレイ / タスクバーの表示は実行時に `QPainter` で描く
+(`app/ToolbarIcons.cpp` の `paintAppIcon()`)。一方 **Explorer が出すアイコンは
+PE のリソース**なので、実行時に描く方式では出せず、ビルド時に `.ico` の実体が要る。
+
+図形の定義を 2 箇所に持たないよう、`.ico` はリポジトリへコミットせず
+**同じ `paintAppIcon()` を呼ぶ生成ツール (`tools/make_app_icon.cpp`) が
+ビルド時に作る**。CMake が `src/app/efs.rc.in` を configure し、生成した
+`efs.ico` を `1 ICON` として exe へ埋め込む。
+
+- 収録サイズは 16 / 32 / 48 / 256。16〜48 は DIB、256 は PNG で持つ
+  (256 を DIB にすると数百 KB になる)。
+- ICO の書き出しは手書き。**Qt の ICO ハンドラは 1 画像しか書けず**、複数サイズを
+  1 ファイルへ収められない。
+- ツールは `QPixmap` を作らないので `QGuiApplication` を必要としない
+  (`QImage` + `QPainter` だけ)。
+- 実測: 生成された `efs.ico` は 4 フレーム (16/32/48/256) を持ち、シェルが
+  exe から解決するアイコン (`SHGetFileInfoW`) が実際にこの図形になることを確認した。
+  なお .NET の `System.Drawing.Icon` は 256px の PNG フレームを読まない
+  (GDI+ の制限) ので、確認には WPF の `IconBitmapDecoder` を使った。
+
 ### 多重起動と既存インスタンスへの要求
 
 名前付き mutex (`Local\` 名前空間 = ログオンセッション単位) で 2 個目を検出し、
@@ -370,6 +393,8 @@ Debug ビルドで確認した (GUI の自動テストは書かない方針な�
 | 閉じるボタン | プロセスは生き続け、`%APPDATA%\efs\efs.ini` が更新される (`hotkey/show=Ctrl+Alt+E` を含む) |
 | `Ctrl+Alt+E` (ウィンドウを隠した状態) | ウィンドウが戻る。`WM_HOTKEY` の eventType は `windows_generic_MSG` |
 | `efs.exe --tray` | ウィンドウを出さずに常駐し、`Ctrl+Alt+E` で出せる |
+| tray メニューの Quit | 正常終了する (ユーザー確認) |
+| exe のアイコン | シェルが exe から引くアイコンが efs のもの (青い丸 + 虫めがね) になる。`.ico` は 16/32/48/256 の 4 フレーム |
 | `efs.exe --quit` (常駐中) | exit 0、既存インスタンスが INI を更新してから終了 |
 | `efs.exe --quit` (未起動) | exit 0。**UI は出さず**プロセスも残らない |
 | 実行中の efs を更新 (`install.ps1`) | `--quit` で graceful に終わり、強制終了の warning は出ない。入れ替え後に作業ディレクトリは残らない |
@@ -378,8 +403,9 @@ Debug ビルドで確認した (GUI の自動テストは書かない方針な�
 | 配置先と前方一致する別ディレクトリ (`...-other\efs.exe`) から起動中 | `install.ps1` はそれを止めない (完全一致で照合) |
 | `install.ps1 -Uninstall` | 配置先とショートカットが消え、INI は残る |
 
-tray メニューの Quit だけは通知領域のクリックが要るため自動化していない。
-実体は `--quit` と同じ `MainWindow::quitApplication()` の 1 本。
+tray メニューの Quit は通知領域のクリックが要るため自動化しておらず、
+ユーザーが手動で確認した。実体は `--quit` と同じ
+`MainWindow::quitApplication()` の 1 本。
 
 ## 配布
 

@@ -73,6 +73,7 @@ src/app/                  UI と検索の駆動。Widgets に依存するのは 
 tests/                    QtTest。ctest に登録
 docs/                     implementation-plan.md (計画の authority)
 scripts/                  補助スクリプト
+tools/                    ビルド時に走らせるだけの道具 (出荷物ではない)
 third_party/              ベンダリングした Everything SDK。整形・lint の対象外
 ```
 
@@ -323,6 +324,10 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   ショートカット作成の失敗も含め、途中で失敗したら旧版を復元して非ゼロで
   終わること (partial install を成功物として残さない)。実行中プロセスの照合は
   `<Destination>\efs.exe` との**完全一致**で行う (前方一致は別物を巻き込む)。
+- **アイコンの図形は `paintAppIcon()` の 1 箇所だけ。** Explorer 用の
+  `efs.ico` はリポジトリへコミットせず、同じ関数を呼ぶ `tools/make_app_icon.cpp`
+  がビルド時に生成して `.rc` で埋め込む。**`.ico` を手で差し替えない** —
+  実行時の表示と Explorer の表示がずれる。
 - **インストール先には何も書かない。** 設定は `%APPDATA%\efs\efs.ini` のまま。
   これを壊すと非管理者で動かなくなる (設定を exe の隣へ置く「ポータブル版」は
   作らない)。インストーラとコード署名は恒久的に作らない。
