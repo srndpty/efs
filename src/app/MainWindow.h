@@ -50,6 +50,10 @@ public:
     // 起動しても隠れたままにしてはいけない (呼び出す手段が無くなる)。
     [[nodiscard]] bool hasTrayIcon() const { return m_tray != nullptr; }
 
+    // **意図的な終了の唯一の経路。** トレイの Quit と `efs.exe --quit` の
+    // IPC が両方ここへ入る。設定を保存してからイベントループを抜ける。
+    void quitApplication();
+
 protected:
     // **閉じるボタンでは終了しない** (常駐アプリ)。設定を保存して隠すだけ。
     // 終了はトレイメニューの Quit だけが行う。

@@ -86,7 +86,10 @@ HotkeySpec parseHotkey(const QString& text)
     if (text.trimmed().isEmpty())
         return spec; // 空 = ホットキー無効。invalid として返る
 
-    const QStringList tokens = text.split(u'+', Qt::SkipEmptyParts);
+    // **空の項を捨てない。** `Qt::SkipEmptyParts` で読み飛ばすと
+    // `Ctrl++Alt+E` や `+Ctrl+Alt+E` が正しい綴りと同じに解釈されてしまい、
+    // 「打ち間違えた INI が黙って動く」ことになる。壊れた綴りは invalid にする。
+    const QStringList tokens = text.split(u'+');
     bool keySeen = false;
 
     for (const QString& raw : tokens) {

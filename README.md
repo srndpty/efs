@@ -258,6 +258,9 @@ Name 列に Windows のファイル種別アイコンを出す。
 - 受け付けるキーは `A-Z` / `0-9` / `F1-F24` / `Space`。修飾キーの綴りは
   大文字小文字を問わず `Ctrl` (`Control`) / `Alt` / `Shift` / `Meta` (`Win`)。
   出力は常に `Ctrl+Alt+Shift+Meta+<key>` の順に正規化する。
+- **空の項は読み飛ばさず invalid にする** (`Ctrl++Alt+E` / `+Ctrl+Alt+E` /
+  `Ctrl+Alt++E` / `Ctrl+ +E`)。読み飛ばすと打ち間違えた INI が正しい綴りと
+  同じに解釈され、「壊れているのに黙って動く」ことになる。
 - **修飾キー無しは拒否する** (OS 全体でそのキーを 1 つ奪ってしまう)。
   空文字は「意図的に無効」として尊重し、解釈できない綴りは既定へ戻す
   (壊れた INI で黙って無効になると「なぜか効かない」になるため)。
@@ -265,18 +268,52 @@ Name 列に Windows のファイル種別アイコンを出す。
   スレッドのメッセージキューへ届くので、ウィンドウが隠れていても・作り直されても
   Qt の native event filter で拾える。`MOD_NOREPEAT` を付けて、押しっぱなしで
   前面化を連打しないようにする。
+- native event filter は **`windows_generic_MSG` と `windows_dispatcher_MSG` の
+  両方**を受ける。実測 (Qt 6.8.3 / Windows 11) では `WM_HOTKEY` は
+  **`windows_generic_MSG`** で届いたが、どちらで渡すかは Qt の内部実装次第なので
+  片方に決め打たない (決め打つと Qt の版が変わった途端にホットキーが黙って
+  効かなくなる)。`WM_HOTKEY` + ホットキー ID の照合はそのまま維持する。
 - **登録に失敗しても起動を止めない。** 他アプリとの衝突は普通に起こるので、
   検索欄の下に `Global hotkey Ctrl+Alt+E is unavailable (already in use by
   another application).` と 1 行出すだけ (modal は出さない)。backend error と
   Regex 警告の方が「今の操作」に近いので、表示の優先度はこれが最も低い。
 
-### 多重起動防止
+### 多重起動と既存インスタンスへの要求
 
 名前付き mutex (`Local\` 名前空間 = ログオンセッション単位) で 2 個目を検出し、
 `RegisterWindowMessageW` で得たメッセージ ID を `HWND_BROADCAST` へ投げてから
-自分は終了する。既存インスタンスは native event filter でそれを受けて
-`showAndActivate()` する (常駐中はウィンドウが隠れているのでブロードキャストが要る)。
+自分は終了する。既存インスタンスは native event filter でそれを受ける
+(常駐中はウィンドウが隠れているのでブロードキャストが要る)。
 **この 1 経路のために Qt Network (`QLocalServer`) は入れない。**
+
+要求は 1 つのメッセージの `wParam` で区別する (メッセージを 2 つ登録しても
+失敗点が増えるだけ)。知らない要求コードは消費するだけで、Show や Quit へ
+勝手に倒さない。
+
+| 起動 | 既存インスタンスが居る | 居ない |
+|---|---|---|
+| `efs.exe` | 前面に出して自分は exit 0 | 通常起動 |
+| `efs.exe --quit` | 設定を保存して終了させ、自分は exit 0 | 何もせず exit 0 (**UI は出さない**) |
+
+`--quit` は `install.ps1` が更新前に使う graceful exit。**閉じる = 隠すになった
+以上、`WM_CLOSE` (`CloseMainWindow`) では終了しない**ので、外から行儀よく
+終わらせる手段がこれしかない。tray の Quit と同じ `MainWindow::quitApplication()`
+(= `saveSettings()` → `quit()`) に合流させてあり、終了経路は 1 本だけ。
+
+`CreateMutexW` の結果は 3 通りを区別する。
+
+| 結果 | 立場 | 動作 |
+|---|---|---|
+| 非 NULL + `!ERROR_ALREADY_EXISTS` | Primary | 通常起動。`--quit` は exit 0 |
+| 非 NULL + `ERROR_ALREADY_EXISTS` | Secondary | 要求を投げて exit 0。**投げられなければ exit 1** |
+| NULL | Error | 理由を出して通常起動を続ける。`--quit` は exit 1 |
+
+**`NULL` を Secondary 扱いして exit 0 しない。** 「既に起動している」と「判定
+そのものができなかった」は別の事象で、後者を成功終了させると、起動したはずの
+アプリが理由も無く消えたように見える。`RegisterWindowMessageW` の失敗も同じ
+infrastructure error として扱う (mutex は握ったままにする — 手放すと今度は
+多重起動まで許してしまう)。送れていないのに成功として終わらないのは
+`install.ps1` のためでもある (graceful に終わったと誤解して強制終了へ進む)。
 
 ### インストール
 
@@ -295,6 +332,14 @@ pwsh scripts/install.ps1 -Uninstall
 - **インストーラ (MSI / MSIX / NSIS / WiX) は作らない。コード署名もしない。**
   個人用ツールであり、未署名インストーラの SmartScreen 警告を避けられる
   この方式で足りる。
+- **fail-closed。旧版を消してから上書きしない。** 手順は
+  ① staging (`<Destination>.staging-<pid>`) へコピーして必須ファイルを検証
+  → ② 旧版を `<Destination>.backup-<pid>` へ退避 → ③ staging を配置先へ move
+  → ④ 配置後にもう一度検証 → ⑤ ショートカット作成 → ⑥ 成功して初めて backup を
+  捨てる。②以降のどこで失敗しても**旧版を復元**し、非ゼロで終わる。
+  **ショートカット作成の失敗も rollback 対象**で、既存の `.lnk` は先に退避して
+  おき、元が無かったものは消して戻す。staging と backup は配置先と同じ親に置く
+  (別ボリュームだと move がコピーになり、入れ替えの性質が変わる)。
 - 事前確認は「管理者かどうか」ではなく**実際に書けるか**。`-Destination` に
   ユーザー書き込み可能な場所を指せば、昇格なしでスクリプト自体を検証できる。
   ショートカット 2 つはユーザープロファイル配下なので、昇格が要るのは
@@ -302,9 +347,13 @@ pwsh scripts/install.ps1 -Uninstall
 - **設定は `%APPDATA%\efs\efs.ini` のまま。インストール先には何も書かない。**
   だから非管理者でも普通に使えるし、アンインストールしても設定は残る。
   設定を exe の隣に置く「ポータブル版」は作らない。
-- 常駐しているのが普通なので、上書きの前に実行中の efs を
-  `CloseMainWindow()` (設定の保存を走らせるため) → 応答しなければ強制終了、
-  の順で止める。置き換えは全消し → コピーで、古い版のファイルを残さない。
+- 常駐しているのが普通なので、上書きの前に **`efs.exe --quit` で graceful に
+  終わってもらう** (10 秒待って駄目なときだけ強制終了し、その旨を warning に
+  出す)。`CloseMainWindow()` は Phase 4 では「隠す」でしかなく終了しないので、
+  そこへ頼ると**通常経路が毎回強制終了**になり、設定の保存を飛ばしてしまう。
+- 実行中プロセスの照合は **`<Destination>\efs.exe` との完全一致** (正規化した
+  フルパスで比較)。前方一致にすると `C:\Program Files\efs-old\efs.exe` のような
+  別物まで巻き込んで止めてしまう。
 
 Everything 本体は引き続き別途常駐が必要。Everything のトレイアイコンを消したい
 場合は Everything 側の `show_tray_icon=0` にする (efs のコードは関与しない)。
@@ -317,9 +366,20 @@ Debug ビルドで確認した (GUI の自動テストは書かない方針な�
 |---|---|
 | 2 個目の起動 | 即座に終了コード 0 で終わり、プロセスは 1 つのまま |
 | 2 個目の起動 → 既存インスタンス | 隠れていたウィンドウが前面に戻る |
+| `--tray` 起動直後に 2 個目を 5 連射 | 5 回とも exit 0・プロセスは 1 つ・ウィンドウが出る (**activation を取りこぼさない**)。隠す→起動を 5 往復しても同じ |
 | 閉じるボタン | プロセスは生き続け、`%APPDATA%\efs\efs.ini` が更新される (`hotkey/show=Ctrl+Alt+E` を含む) |
-| `Ctrl+Alt+E` (ウィンドウを隠した状態) | ウィンドウが戻る |
+| `Ctrl+Alt+E` (ウィンドウを隠した状態) | ウィンドウが戻る。`WM_HOTKEY` の eventType は `windows_generic_MSG` |
 | `efs.exe --tray` | ウィンドウを出さずに常駐し、`Ctrl+Alt+E` で出せる |
+| `efs.exe --quit` (常駐中) | exit 0、既存インスタンスが INI を更新してから終了 |
+| `efs.exe --quit` (未起動) | exit 0。**UI は出さず**プロセスも残らない |
+| 実行中の efs を更新 (`install.ps1`) | `--quit` で graceful に終わり、強制終了の warning は出ない。入れ替え後に作業ディレクトリは残らない |
+| ショートカット作成を失敗させる (`efs.lnk` の場所をディレクトリにする) | 旧版が復元され (退避した中身がそのまま戻る)、非ゼロで終わる。退避した `.lnk` も戻る |
+| 不完全な `-Source` | 配置先に触れる前に失敗。旧版は無傷 |
+| 配置先と前方一致する別ディレクトリ (`...-other\efs.exe`) から起動中 | `install.ps1` はそれを止めない (完全一致で照合) |
+| `install.ps1 -Uninstall` | 配置先とショートカットが消え、INI は残る |
+
+tray メニューの Quit だけは通知領域のクリックが要るため自動化していない。
+実体は `--quit` と同じ `MainWindow::quitApplication()` の 1 本。
 
 ## 配布
 

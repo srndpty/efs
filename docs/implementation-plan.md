@@ -598,6 +598,27 @@ Everything の自動起動 / Everything 1.5 対応。
 - **設定の保存経路が 2 本になった。** 閉じる = 終了ではなくなったので、
   `closeEvent` (隠す前) と トレイの Quit の両方から `saveSettings()` を呼ぶ。
   片方だけにすると、その経路で終わったときだけ設定が飛ぶ。
+**P4 review で追加した修正**
+
+1. **native event の種別を決め打たない。** `windows_generic_MSG` だけを見て
+   いたが、Qt が system-wide message を `windows_dispatcher_MSG` で渡す経路も
+   あるため両方受ける。実測 (Qt 6.8.3) では `WM_HOTKEY` は
+   `windows_generic_MSG` で届いた。ID の照合は維持。
+2. **`efs.exe --quit`。** 閉じる = 隠す にした結果、`CloseMainWindow` では
+   終了しなくなり、`install.ps1` の「行儀よく閉じる → 駄目なら Kill」が
+   **通常経路で必ず Kill** になっていた (= 設定が保存されない)。既存の
+   SingleInstance IPC を wParam 1 つ分だけ拡張して `--quit` を足し、tray の
+   Quit と同じ `MainWindow::quitApplication()` へ合流させた。
+3. **install.ps1 を実際に fail-closed にした。** 「旧版を消してからコピー」を
+   staging + backup + 失敗時 rollback へ変更。ショートカット作成の失敗も
+   rollback 対象 (既存 `.lnk` は先に退避)。実行中プロセスの照合は前方一致から
+   `<Destination>\efs.exe` との完全一致へ。
+4. **`CreateMutexW` の 3 状態を区別。** NULL を Secondary 扱いして exit 0 して
+   いたのをやめ、`InstanceRole::{Primary,Secondary,Error}` にした。
+   `RegisterWindowMessageW` の失敗も同じ infrastructure error として扱う。
+5. **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等を invalid に)。
+   `Qt::SkipEmptyParts` をやめ、table-driven の回帰テストを追加した。
+
 - deviation (計画との差分):
   1. `QApplication::setQuitOnLastWindowClosed(false)` を入れた副作用として、
      **トレイが使えない環境では閉じてもプロセスが残る**。`closeEvent` の

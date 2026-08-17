@@ -12,8 +12,9 @@
 # 設定は %APPDATA%\efs\efs.ini にあり、**インストール先には何も書かない**。
 # したがってアンインストールしても設定は残るし、非管理者でも普通に使える。
 #
-# fail-closed: 事前条件を全部確認してから触り始め、途中で失敗したら
-# 中途半端な状態を残さない。
+# **fail-closed。** 旧版をいきなり消して上書きしない。staging へ配置して検証し、
+# 旧版を backup へ退避してから入れ替える。ショートカット作成まで含めて、途中で
+# 失敗したら旧版を復元する。**中途半端なインストールを成功物として残さない。**
 
 [CmdletBinding()]
 param(
@@ -31,12 +32,30 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Source) { $Source = Join-Path $repo 'dist\efs' }
 
+# 相対パスや `..` を含んだままだと後の比較 (実行中プロセスの照合) がずれる。
+function Get-NormalizedPath([string]$path) {
+    try { return [System.IO.Path]::GetFullPath($path) } catch { return $path }
+}
+
+$Destination = Get-NormalizedPath $Destination
+$installedExe = Join-Path $Destination 'efs.exe'
+
+# 入れ替え用の作業ディレクトリ。**配置先と同じ親**に置く (別ボリュームだと
+# Move-Item がコピーになり、入れ替えが atomic に近い性質を失う)。
+$staging = "$Destination.staging-$PID"
+$backup = "$Destination.backup-$PID"
+$shortcutBackupDir = Join-Path $env:TEMP "efs-install-shortcuts-$PID"
+
 # ショートカットはどちらもユーザープロファイル配下に置く。個人用ツールなので
 # 全ユーザーへ入れる必要が無く、この 2 つは管理者権限なしで作れる
 # (昇格が要るのは Program Files へのコピーだけ)。
 $userPrograms = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $startMenuLink = Join-Path $userPrograms 'efs.lnk'
 $startupLink = Join-Path $userPrograms 'Startup\efs.lnk'
+
+# package.ps1 が入れたはずのもの。網羅リストではなく「これが無ければ確実に
+# 起動しない」ものだけ (必要ファイルの authority は windeployqt)。
+$requiredFiles = @('efs.exe', 'Everything64.dll', 'Qt6Core.dll', 'platforms\qwindows.dll')
 
 # --- 事前条件 -----------------------------------------------------------------
 # 「管理者かどうか」ではなく「実際に書けるか」を見る。こうしておくと
@@ -67,6 +86,14 @@ $Destination へ書き込めない (Program Files なら管理者権限が必要
 "@
 }
 
+function Test-InstallContents([string]$root) {
+    foreach ($required in $requiredFiles) {
+        if (-not (Test-Path (Join-Path $root $required))) {
+            throw "$root が不完全: $required が無い。"
+        }
+    }
+}
+
 function Remove-Shortcuts {
     foreach ($link in @($startMenuLink, $startupLink)) {
         if (Test-Path $link) {
@@ -76,21 +103,30 @@ function Remove-Shortcuts {
     }
 }
 
-# 実行中だと上書きできない。常駐しているのが普通なので、黙って止める前に告げる。
+# 実行中だと上書きできない。**まず --quit で graceful に終わってもらう** —
+# WM_CLOSE (CloseMainWindow) は Phase 4 では「隠す」なので終了しないし、
+# 強制終了は設定の保存 (quitApplication) を飛ばしてしまう。
 function Stop-RunningEfs {
-    $running = @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -and $_.Path.StartsWith($Destination, [StringComparison]::OrdinalIgnoreCase) })
+    # 照合は「配置先の efs.exe そのもの」との完全一致。前方一致にすると
+    # `C:\Program Files\efs-old\efs.exe` のような別物まで巻き込む。
+    $target = Get-NormalizedPath $installedExe
+    $running = @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and (Get-NormalizedPath $_.Path).Equals($target, [StringComparison]::OrdinalIgnoreCase)
+        })
     if ($running.Count -eq 0) { return }
 
-    Write-Host "実行中の efs を終了する ($($running.Count) プロセス)"
+    Write-Host "実行中の efs に終了を要求する ($($running.Count) プロセス)"
+    # 自分自身へ --quit を投げる (既存インスタンスが受けて設定を保存して終わる)。
+    $quit = Start-Process -FilePath $target -ArgumentList '--quit' -PassThru -Wait
+    if ($quit.ExitCode -ne 0) {
+        Write-Warning "--quit が終了コード $($quit.ExitCode) を返した。"
+    }
+
     foreach ($process in $running) {
-        # まずは行儀よく閉じる (設定の保存を走らせるため)。
-        $null = $process.CloseMainWindow()
-        if (-not $process.WaitForExit(5000)) {
-            Write-Warning "応答しないため強制終了する (pid $($process.Id))"
-            $process.Kill()
-            $null = $process.WaitForExit(5000)
-        }
+        if ($process.WaitForExit(10000)) { continue }
+        Write-Warning "graceful に終了しないため強制終了する (pid $($process.Id))。設定は保存されない。"
+        $process.Kill()
+        $null = $process.WaitForExit(5000)
     }
 }
 
@@ -112,59 +148,115 @@ if ($Uninstall) {
 if (-not (Test-Path $Source)) {
     throw "配置元が無い: $Source`n先に配布ディレクトリを作ること: pwsh scripts/package.ps1"
 }
-$sourceExe = Join-Path $Source 'efs.exe'
-if (-not (Test-Path $sourceExe)) {
-    throw "$Source に efs.exe が無い。package.ps1 が失敗している可能性がある。"
-}
-# package.ps1 が入れたはずのものを最低限だけ確認する (詳細は package.ps1 側の責務)。
-foreach ($required in @('Everything64.dll', 'Qt6Core.dll', 'platforms\qwindows.dll')) {
-    if (-not (Test-Path (Join-Path $Source $required))) {
-        throw "配置元が不完全: $required が無い。pwsh scripts/package.ps1 をやり直すこと。"
+try { Test-InstallContents $Source }
+catch { throw "$($_.Exception.Message)`npwsh scripts/package.ps1 をやり直すこと。" }
+
+# 入れ替えのどこまで進んだか。rollback の範囲を決めるのに使う。
+$swapped = $false
+$shortcutsTouched = $false
+
+function Restore-Previous {
+    # 入れ替え済みなら、新しい方を捨てて旧版を戻す。
+    if ($script:swapped) {
+        if (Test-Path $Destination) {
+            Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $backup) {
+            Write-Host "旧版を復元: $backup → $Destination"
+            Move-Item $backup $Destination
+        }
+    }
+    # ショートカットも触った分だけ戻す (元が無かったものは消す)。
+    if ($script:shortcutsTouched) {
+        foreach ($link in @($startMenuLink, $startupLink)) {
+            $saved = Join-Path $shortcutBackupDir (Split-Path -Leaf (Split-Path -Parent $link))
+            $saved = Join-Path $saved (Split-Path -Leaf $link)
+            if (Test-Path $saved) {
+                New-Item -ItemType Directory -Force (Split-Path -Parent $link) | Out-Null
+                Copy-Item -Force $saved $link
+            } elseif (Test-Path $link) {
+                Remove-Item -Force $link -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
-Stop-RunningEfs
-
-# 古い版のファイルが残らないよう、置き換えは全消し → コピー。
-if (Test-Path $Destination) {
-    Write-Host "既存のインストールを削除: $Destination"
-    Remove-Item -Recurse -Force $Destination
-}
-Write-Host "コピー: $Source → $Destination"
-New-Item -ItemType Directory -Force $Destination | Out-Null
-Copy-Item -Recurse -Force (Join-Path $Source '*') $Destination
-
-$installedExe = Join-Path $Destination 'efs.exe'
-if (-not (Test-Path $installedExe)) {
-    Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
-    throw "コピーに失敗した ($installedExe が無い)。"
+function Remove-WorkingDirs {
+    foreach ($dir in @($staging, $backup, $shortcutBackupDir)) {
+        if (Test-Path $dir) { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue }
+    }
 }
 
-# --- ショートカット -----------------------------------------------------------
-$shell = New-Object -ComObject WScript.Shell
-New-Item -ItemType Directory -Force (Split-Path -Parent $startupLink) | Out-Null
+# 前回の作業ディレクトリが残っていたら (異常終了した等) 邪魔なので消す。
+Remove-WorkingDirs
 
-Write-Host "スタートメニュー: $startMenuLink"
-$link = $shell.CreateShortcut($startMenuLink)
-$link.TargetPath = $installedExe
-$link.WorkingDirectory = $Destination
-$link.Description = 'efs — Everything backed file search'
-$link.Save()
+try {
+    Stop-RunningEfs
 
-if ($NoStartup) {
-    if (Test-Path $startupLink) { Remove-Item -Force $startupLink }
-    Write-Host "スタートアップ登録: なし (-NoStartup)"
-} else {
-    # --tray でウィンドウを出さずトレイに常駐する。ログオンのたびに
-    # ウィンドウが開かないようにするためで、設定項目は増やさない。
-    Write-Host "スタートアップ: $startupLink (--tray)"
-    $startup = $shell.CreateShortcut($startupLink)
-    $startup.TargetPath = $installedExe
-    $startup.Arguments = '--tray'
-    $startup.WorkingDirectory = $Destination
-    $startup.Description = 'efs (tray)'
-    $startup.Save()
+    # 1. staging へ配置して検証する。ここまでは既存のインストールに触れない。
+    Write-Host "staging へコピー: $Source → $staging"
+    New-Item -ItemType Directory -Force $staging | Out-Null
+    Copy-Item -Recurse -Force (Join-Path $Source '*') $staging
+    Test-InstallContents $staging
+
+    # 2. 旧版を backup へ退避してから入れ替える (消してからコピーしない)。
+    if (Test-Path $Destination) {
+        Write-Host "旧版を退避: $Destination → $backup"
+        Move-Item $Destination $backup
+    }
+    Move-Item $staging $Destination
+    $swapped = $true
+    Write-Host "配置: $Destination"
+
+    # 3. 入れ替えた実体をもう一度検証する (移動が中途半端でないこと)。
+    Test-InstallContents $Destination
+
+    # 4. ショートカット。ここで失敗しても rollback 対象にするため、既存の
+    #    .lnk を先に退避しておく。
+    New-Item -ItemType Directory -Force (Split-Path -Parent $startupLink) | Out-Null
+    foreach ($link in @($startMenuLink, $startupLink)) {
+        if (Test-Path $link) {
+            $savedDir = Join-Path $shortcutBackupDir (Split-Path -Leaf (Split-Path -Parent $link))
+            New-Item -ItemType Directory -Force $savedDir | Out-Null
+            Copy-Item -Force $link (Join-Path $savedDir (Split-Path -Leaf $link))
+        }
+    }
+    $shortcutsTouched = $true
+
+    $shell = New-Object -ComObject WScript.Shell
+
+    Write-Host "スタートメニュー: $startMenuLink"
+    $link = $shell.CreateShortcut($startMenuLink)
+    $link.TargetPath = $installedExe
+    $link.WorkingDirectory = $Destination
+    $link.Description = 'efs — Everything backed file search'
+    $link.Save()
+    if (-not (Test-Path $startMenuLink)) { throw "ショートカットを作れなかった: $startMenuLink" }
+
+    if ($NoStartup) {
+        if (Test-Path $startupLink) { Remove-Item -Force $startupLink }
+        Write-Host "スタートアップ登録: なし (-NoStartup)"
+    } else {
+        # --tray でウィンドウを出さずトレイに常駐する。ログオンのたびに
+        # ウィンドウが開かないようにするためで、設定項目は増やさない。
+        Write-Host "スタートアップ: $startupLink (--tray)"
+        $startup = $shell.CreateShortcut($startupLink)
+        $startup.TargetPath = $installedExe
+        $startup.Arguments = '--tray'
+        $startup.WorkingDirectory = $Destination
+        $startup.Description = 'efs (tray)'
+        $startup.Save()
+        if (-not (Test-Path $startupLink)) { throw "ショートカットを作れなかった: $startupLink" }
+    }
+} catch {
+    Write-Warning "インストールに失敗した: $($_.Exception.Message)"
+    Restore-Previous
+    Remove-WorkingDirs
+    throw
 }
+
+# 成功。ここで初めて旧版を捨てる。
+Remove-WorkingDirs
 
 $files = @(Get-ChildItem -Path $Destination -Recurse -File)
 Write-Host ""

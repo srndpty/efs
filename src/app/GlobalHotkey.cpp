@@ -105,12 +105,25 @@ void GlobalHotkey::unbind()
 bool GlobalHotkey::nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result)
 {
     Q_UNUSED(result)
-    if (eventType != QByteArrayLiteral("windows_generic_MSG"))
+    // Qt は Windows で 2 種類の eventType を投げる。ウィンドウ宛が
+    // "windows_generic_MSG"、イベントディスパッチャ宛 (スレッドメッセージ) が
+    // "windows_dispatcher_MSG"。**WM_HOTKEY は hwnd=nullptr で登録している以上、
+    // どちらで来るかは Qt の内部実装次第なので両方受ける。** 片方に決め打つと、
+    // Qt の版が変わった途端にホットキーが黙って効かなくなる。
+    if (eventType != QByteArrayLiteral("windows_generic_MSG") &&
+        eventType != QByteArrayLiteral("windows_dispatcher_MSG"))
         return false;
 
     const auto* msg = static_cast<const MSG*>(message);
     if (msg->message != WM_HOTKEY || msg->wParam != kHotkeyId)
         return false;
+
+    // 実際にどちらで届いたかは 1 度だけ診断へ残す (UI には出さない)。
+    static bool reported = false;
+    if (!reported) {
+        reported = true;
+        qInfo("WM_HOTKEY の nativeEventFilter eventType: %s", eventType.constData());
+    }
 
     emit activated();
     // 消費した。他のフィルタへは回さない。

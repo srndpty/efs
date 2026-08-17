@@ -304,6 +304,25 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   綴りは既定へ戻す。変更する UI は作らない (設定ダイアログを作らない方針は維持)。
 - **多重起動防止のために Qt Network を入れない。** 名前付き mutex (`Local\` =
   セッション単位) と `RegisterWindowMessageW` のブロードキャストで足りる。
+- **native event filter は `windows_generic_MSG` と `windows_dispatcher_MSG` の
+  両方を受ける。** どちらで渡されるかは Qt の内部実装次第 (実測では
+  `WM_HOTKEY` は generic)。片方に決め打つと Qt の版が変わった途端に黙って
+  効かなくなる。メッセージ種別と ID の照合は必ず行う。
+- **`CreateMutexW` の NULL を Secondary 扱いしない。** 「既に起動している」と
+  「判定そのものができなかった」は別の事象。後者 (`InstanceRole::Error`) は
+  理由を出して通常起動を続け、`--quit` は exit 1 にする。要求を送れなかった
+  Secondary も exit 1 — 送れていないのに成功として終わると `install.ps1` が
+  graceful に終わったと誤解して強制終了へ進む。
+- **外から終わらせる手段は `efs.exe --quit` だけ。** 閉じる = 隠す なので
+  `WM_CLOSE` (`CloseMainWindow`) では終了しない。tray Quit と `--quit` は
+  `MainWindow::quitApplication()` の 1 本に合流させ、必ず `saveSettings()` を
+  通す。`install.ps1` はまず `--quit`、待ってから最後の手段としてだけ Kill。
+- **ホットキーの綴りで空の項を読み飛ばさない** (`Ctrl++Alt+E` 等は invalid)。
+  `Qt::SkipEmptyParts` で拾うと、打ち間違えた INI が正しい綴りと同じに解釈される。
+- **install は staging + backup で入れ替える。** 旧版を消してからコピーしない。
+  ショートカット作成の失敗も含め、途中で失敗したら旧版を復元して非ゼロで
+  終わること (partial install を成功物として残さない)。実行中プロセスの照合は
+  `<Destination>\efs.exe` との**完全一致**で行う (前方一致は別物を巻き込む)。
 - **インストール先には何も書かない。** 設定は `%APPDATA%\efs\efs.ini` のまま。
   これを壊すと非管理者で動かなくなる (設定を exe の隣へ置く「ポータブル版」は
   作らない)。インストーラとコード署名は恒久的に作らない。

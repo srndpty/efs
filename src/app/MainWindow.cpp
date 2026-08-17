@@ -191,12 +191,9 @@ void MainWindow::buildTrayIcon()
     connect(showAction, &QAction::triggered, this, &MainWindow::showAndActivate);
     menu->addSeparator();
     auto* quitAction = menu->addAction(QStringLiteral("Quit"));
-    // **唯一の終了経路。** 閉じるボタンは隠すだけなので、ここを消すと
-    // アプリを終了できなくなる。
-    connect(quitAction, &QAction::triggered, this, [this] {
-        saveSettings();
-        QApplication::quit();
-    });
+    // 閉じるボタンは隠すだけなので、UI からの終了経路はここだけ。
+    // 実体は quitApplication() で、`efs.exe --quit` の IPC と共有している。
+    connect(quitAction, &QAction::triggered, this, &MainWindow::quitApplication);
 
     m_tray = new QSystemTrayIcon(appIcon(), this);
     m_tray->setToolTip(QStringLiteral("efs"));
@@ -223,6 +220,14 @@ void MainWindow::showAndActivate()
     // 呼び出し直後にそのまま打ち始められるようにする。
     m_searchEdit->setFocus();
     m_searchEdit->selectAll();
+}
+
+void MainWindow::quitApplication()
+{
+    // トレイの Quit と `--quit` IPC の合流点。**保存してから終了する** —
+    // 閉じる = 隠す になった以上、この経路を通らずに殺されると設定が飛ぶ。
+    saveSettings();
+    QApplication::quit();
 }
 
 void MainWindow::applyHotkey()

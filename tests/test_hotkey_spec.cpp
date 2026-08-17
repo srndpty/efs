@@ -24,6 +24,8 @@ private slots:
     void rejectsInvalid();
     void modifierOnlyIsRejected_data();
     void modifierOnlyIsRejected();
+    void emptyTokensAreRejected_data();
+    void emptyTokensAreRejected();
     void formatIsNormalized_data();
     void formatIsNormalized();
     void roundTrip_data();
@@ -130,6 +132,27 @@ void TestHotkeySpec::modifierOnlyIsRejected_data()
 }
 
 void TestHotkeySpec::modifierOnlyIsRejected()
+{
+    QFETCH(QString, text);
+    QVERIFY(!efs::parseHotkey(text).isValid());
+}
+
+// `+` の連続や先頭・末尾の `+` は打ち間違い。空の項を読み飛ばして正しい綴りと
+// 同じに解釈すると、壊れた INI が黙って動いてしまうので invalid にする。
+void TestHotkeySpec::emptyTokensAreRejected_data()
+{
+    QTest::addColumn<QString>("text");
+
+    QTest::newRow("double + (中)") << QStringLiteral("Ctrl++Alt+E");
+    QTest::newRow("double + (キーの前)") << QStringLiteral("Ctrl+Alt++E");
+    QTest::newRow("leading +") << QStringLiteral("+Ctrl+Alt+E");
+    QTest::newRow("trailing +") << QStringLiteral("Ctrl+Alt+E+");
+    QTest::newRow("+ だけ") << QStringLiteral("+");
+    QTest::newRow("+ の連続だけ") << QStringLiteral("+++");
+    QTest::newRow("空白だけの項") << QStringLiteral("Ctrl+ +E");
+}
+
+void TestHotkeySpec::emptyTokensAreRejected()
 {
     QFETCH(QString, text);
     QVERIFY(!efs::parseHotkey(text).isValid());
