@@ -17,7 +17,7 @@ private slots:
     void errorTextMapsKnownCodes();
     void errorTextMapsUnknownCode();
     void loadResolvesAllEntryPoints();
-    void loadUsesOnlyTheDllBesideTheExe();
+    void successfulLoadCameFromTheDllBesideTheExe();
     void queryReturnsResults();
 };
 
@@ -56,10 +56,15 @@ void TestEverythingApi::loadResolvesAllEntryPoints()
     QVERIFY(api.CleanUp != nullptr);
 }
 
-// **exe と同階層の DLL だけが authority。** PATH / CWD へフォールバックしない
-// (P4 review #1)。フォールバックが復活すると「開発機では PATH 上の別 DLL を
-// 拾って動く」という不確定性が戻るので、ロードした実体の場所を固定する。
-void TestEverythingApi::loadUsesOnlyTheDllBesideTheExe()
+// **exe と同階層の DLL だけが authority** (P4 review #1) の**成功側だけ**を
+// 固定する。CMake が test exe の隣へ DLL をコピーしているので、ここで言えるのは
+// 「ロードに成功したなら、それは隣の DLL だった」まで。
+//
+// **これは negative test ではない。** 「exe の隣に無く PATH に居るときは
+// ロードしない」を本当に固定するには、DLL を除いた temp ディレクトリへ exe を
+// 置き、PATH に別の Everything64.dll を積んだ subprocess を起動する必要がある。
+// それは再実行可能な process smoke (review #10) と一緒に入れる。
+void TestEverythingApi::successfulLoadCameFromTheDllBesideTheExe()
 {
     const QString expected =
         QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath())

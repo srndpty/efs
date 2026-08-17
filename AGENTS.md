@@ -380,12 +380,21 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   `LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`)。ビルドと
   `package.ps1` の両方が隣へ置く契約なので、無いのは配置の失敗。フォールバック
   を戻すと「開発機では PATH 上の別 DLL を拾って動く」不確定性が復活する。
-  回帰テストは `test_everything_api.cpp` の `loadUsesOnlyTheDllBesideTheExe`。
+  回帰テストは `test_everything_api.cpp` の
+  `successfulLoadCameFromTheDllBesideTheExe` — ただしこれは**成功側だけ**を
+  固定する。「隣に無く PATH に居るときは拾わない」の negative test には
+  subprocess が要るので、process smoke と一緒に入れる (未実施)。
 - **接続先の Everything の版を runtime で確認する (fail-closed)。** 版が取れるのは
-  IPC が通ってからなので、**最初に成功したクエリの直後に 1 度だけ**
-  `major.minor == 1.4` を見て、違えば以後の検索をすべて失敗させる。版の問い合わせも
-  IPC なので、**結果行を読み終えた後**に行う (`GetResult*` の間に挟まない)。
-  build number は gate にせずログだけ。
+  IPC が通ってからなので、**最初に成功したクエリの直後**に `major.minor == 1.4` を
+  見る。版の問い合わせも IPC なので、**結果行を読み終えた後**に行う
+  (`GetResult*` の間に挟まない)。build number は gate にせずログだけ。
+  - **確定した後は query を投げない。** `search()` の冒頭で判定済みの
+    `m_versionError` を見て即失敗させる。毎回 5,000 件を読んでから捨てると、
+    Regex では 1 回 7.7〜24.5 秒を無駄に待つことになる。
+  - **判定を latch するのは有効な版が取れたときだけ。** 版が 0 = IPC が通って
+    いないので transient として扱い (その検索だけ失敗)、次回やり直す。
+    取れない状態を「対象外」と覚えると、Everything を起こし直しても永久に
+    失敗し続ける。
 - **`--tray` で隠して起動したときは初回クエリを出さない。**
   `restoreOptions(options, InitialDispatch::Deferred)` で値だけ戻し、最初の
   `showAndActivate()` で 1 本だけ発行する。ログオンのたびに見えない状態で
@@ -401,7 +410,9 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   だけという境界は維持する (パスは `settingsFilePath()` 経由で取る)。
 - **rollback の完了を確認できたときだけ作業ディレクトリを消す** (`install.ps1`)。
   旧版を戻せた / 戻した中身が必須ファイルを満たす / 退避した `.lnk` を戻せた、の
-  すべてを確認する。失敗したら staging / backup / ショートカットの退避を残し、
-  手動復旧の path を出して非ゼロで終わる。
+  すべてを確認する。**初回インストールの経路も同じ** — partial な配置先を
+  削除できたことまで見る (消せなければ partial が「インストール済み」として
+  残る)。失敗したら staging / backup / ショートカットの退避を残し、手動復旧の
+  path を出して非ゼロで終わる。
 - **compile hygiene は `efs_enable_warnings()` の 1 箇所。** 本体・generator・
   tests のすべてに適用する。ツール類だけ警告が緩い状態を作らない。

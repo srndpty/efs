@@ -192,8 +192,16 @@ function Restore-Previous {
         }
     } elseif (-not $script:hadPrevious -and (Test-Path $Destination)) {
         # 初回インストールの途中で失敗した。partial を成功物として残さない。
+        # **削除できたことまで確認する。** ACL / ロックで消せないと partial が
+        # 「インストール済み」として残るので、旧版ありの経路と同じく rollback
+        # 失敗として扱い、recovery data を消さずに終わる。
         Write-Host "配置途中の $Destination を削除 (初回インストール)"
-        Remove-Item -Recurse -Force $Destination -ErrorAction SilentlyContinue
+        try { Remove-Item -Recurse -Force $Destination -ErrorAction Stop }
+        catch { Write-Warning "配置途中の $Destination を削除できなかった: $($_.Exception.Message)" }
+        if (Test-Path $Destination) {
+            Write-Warning "配置途中の $Destination が残っている。"
+            $script:rollbackOk = $false
+        }
     }
     if ($script:newPlaced) {
         Write-Warning "配置済みの新版を取り消した。"
@@ -308,13 +316,26 @@ try {
     if ($rollbackOk) {
         Remove-WorkingDirs
     } else {
+        # 何が残っているかは失敗した境界で違う (初回インストールなら backup は
+        # 無い)。**実在するものだけを挙げる** — 無い path を「ここから戻せる」と
+        # 書くと復旧の手がかりとして嘘になる。
+        $left = @()
+        if (Test-Path $backup) { $left += "  旧版 (退避):           $backup" }
+        if (Test-Path $shortcutBackupDir) { $left += "  ショートカット (退避): $shortcutBackupDir" }
+        if (Test-Path $staging) { $left += "  staging:               $staging" }
+        if (Test-Path $Destination) { $left += "  配置先 (中途半端):     $Destination" }
+        $leftText = if ($left.Count -gt 0) { $left -join "`n" } else { '  (残っているものは無い)' }
+        # 手順も状況に合わせる。旧版が無い初回インストールで「旧版を戻せ」と
+        # 出すのは案内として嘘になる。
+        $howTo = if (Test-Path $backup) {
+            "手動で復旧する場合は、$backup を $Destination へ移し、退避した`nショートカットを $userPrograms 配下へ戻すこと。"
+        } else {
+            "旧版は無い (初回インストール)。中途半端な $Destination を手動で削除すること。"
+        }
         Write-Warning @"
 rollback を完了できなかった。**復旧用のデータは消さずに残してある。**
-  旧版 (退避):           $backup
-  ショートカット (退避): $shortcutBackupDir
-  staging:               $staging
-手動で復旧する場合は、$backup を $Destination へ移し、退避したショートカットを
-$userPrograms 配下へ戻すこと。
+$leftText
+$howTo
 "@
     }
     throw
