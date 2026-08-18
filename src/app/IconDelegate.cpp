@@ -4,7 +4,9 @@
 #include "app/ResultTableModel.h"
 #include "app/ShellIcon.h"
 
+#include <QApplication>
 #include <QImage>
+#include <QStyle>
 #include <QStyleOptionViewItem>
 
 namespace efs {
@@ -14,6 +16,37 @@ namespace {
 QPixmap toPixmap(const QImage& image)
 {
     return image.isNull() ? QPixmap() : QPixmap::fromImage(image);
+}
+
+// Qt 標準の item 描画 (QCommonStyle::viewItemDrawText) は QTextLayout に
+// テキストを流してから行単位で省略する。折り返しが**単語境界**で起きるため、
+// 空白を含む長いパスは "C:\Program ..." のように単語ごと落ちてしまう。
+// そこで描画前に文字単位で省略済みの文字列を作り、Qt 側の省略は無効化する。
+void elideTextPerCharacter(QStyleOptionViewItem* option)
+{
+    if (option->text.isEmpty() || option->textElideMode == Qt::ElideNone)
+        return;
+    // sizeHint 経由では rect が未確定。ここで省略すると列幅計算が壊れる。
+    if (!option->rect.isValid())
+        return;
+
+    const QWidget* widget = option->widget;
+    QStyle* style = widget ? widget->style() : QApplication::style();
+    const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, option, widget);
+    // viewItemDrawText と同じ左右マージン。
+    const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
+    const int width = textRect.width() - 2 * margin;
+    if (width <= 0)
+        return;
+
+    const QString elided =
+        option->fontMetrics.elidedText(option->text, option->textElideMode, width);
+    if (elided == option->text)
+        return;
+
+    option->text = elided;
+    // 既に収まっているので、Qt に再度省略させない (二重の "..." を防ぐ)。
+    option->textElideMode = Qt::ElideNone;
 }
 
 } // namespace
@@ -53,19 +86,19 @@ void IconDelegate::initStyleOption(QStyleOptionViewItem* option, const QModelInd
 {
     QStyledItemDelegate::initStyleOption(option, index);
 
-    if (index.column() != ResultTableModel::ColumnName)
-        return;
+    if (index.column() == ResultTableModel::ColumnName) {
+        const QString key = index.data(ResultTableModel::IconKeyRole).toString();
+        if (!key.isEmpty()) {
+            const QPixmap pixmap = pixmapFor(key);
+            if (!pixmap.isNull()) {
+                option->icon = QIcon(pixmap);
+                option->features |= QStyleOptionViewItem::HasDecoration;
+            }
+        }
+    }
 
-    const QString key = index.data(ResultTableModel::IconKeyRole).toString();
-    if (key.isEmpty())
-        return;
-
-    const QPixmap pixmap = pixmapFor(key);
-    if (pixmap.isNull())
-        return;
-
-    option->icon = QIcon(pixmap);
-    option->features |= QStyleOptionViewItem::HasDecoration;
+    // アイコンを入れた後で行う (装飾の分だけテキスト幅が縮むため)。
+    elideTextPerCharacter(option);
 }
 
 } // namespace efs
