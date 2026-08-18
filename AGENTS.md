@@ -100,6 +100,7 @@ cmake --preset ninja-x64-debug
 cmake --build --preset ninja-x64-debug
 pwsh scripts/lint.ps1 -Bootstrap   # 初回のみ: CI と同じ 22.1 系を .tidy22 に用意
 pwsh scripts/lint.ps1
+pwsh scripts/lint.ps1 -Fix         # 自動修正できる指摘を直してから再検査する
 
 # カバレッジ (要 OpenCppCoverage)
 pwsh scripts/coverage.ps1
@@ -138,6 +139,14 @@ pwsh scripts/package.ps1
   pwsh scripts/lint.ps1                     # 以後は既定でそれが使われる
   pwsh scripts/lint.ps1 -ClangTidy <path>   # 別の版を試すとき
   ```
+
+- **lint はファイル単位で並列に走る** (既定は論理コア数、`-Jobs N` で変更)。
+  clang-tidy 自体は 1 プロセスで TU を順に見るだけなのでコアが余る。手元の
+  23 ファイルで 72 秒 → 9 秒。
+- **`-Fix` は `--fix` を直接使わない。** 並列実行では複数の TU が同じヘッダを
+  同時に書き換えうるため、修正案を YAML に出して `clang-apply-replacements` に
+  まとめて適用させる (重複の解決はこのツールの仕事)。適用後にもう一度検査し、
+  自動修正できなかった指摘が残っていれば失敗する。
 
   期待バージョン (`$expectedVersion`) と `-Bootstrap` が入れる版
   (`$pinnedVersion`) は `lint.ps1` の冒頭にある。**CI ランナーが上がったら

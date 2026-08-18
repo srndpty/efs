@@ -35,7 +35,7 @@ void elideTextPerCharacter(QStyleOptionViewItem* option)
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, option, widget);
     // viewItemDrawText と同じ左右マージン。
     const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
-    const int width = textRect.width() - 2 * margin;
+    const int width = textRect.width() - (2 * margin);
     if (width <= 0)
         return;
 
