@@ -6,6 +6,8 @@
 //
 // initStyleOption だけを差し替え、描画そのものは QStyledItemDelegate に任せる。
 // 自前 paint を書くと選択・交互行・省略記号の扱いを全部再実装することになる。
+// 併せて、全列のテキストを文字単位で省略しておく (Qt 既定は単語境界で折り返して
+// から省略するため、空白を含む長いパスが "C:\Program ..." のように切れる)。
 #pragma once
 
 #include <QHash>
