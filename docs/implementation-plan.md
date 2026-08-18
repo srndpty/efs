@@ -306,7 +306,7 @@ buildQueryString(q) =
 2. api.SetRegex(FALSE)                     // 6.2 の方針
 3. api.SetMatchCase(q.matchCase) / SetMatchPath(q.matchPath) / SetMatchWholeWord(FALSE)
 4. api.SetSort(toEverythingSort(q.sortKey, q.sortOrder))
-5. api.SetRequestFlags(FILE_NAME | PATH | SIZE | DATE_MODIFIED | ATTRIBUTES)
+5. api.SetRequestFlags(FILE_NAME | PATH | SIZE | DATE_MODIFIED)   // ATTRIBUTES は要求しない (README「ATTRIBUTES を要求すると桁が変わる」)
 6. api.SetOffset(0); api.SetMax(q.maxResults)
 7. api.QueryW(TRUE)                        // ブロッキング
 8. 失敗 → GetLastError() を日本語メッセージへ写像し error にセットして返す

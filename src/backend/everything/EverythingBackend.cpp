@@ -106,8 +106,7 @@ SearchResults EverythingBackend::search(const SearchQuery& query)
 
     // 対象外の版だと**すでに分かっている**なら、クエリを投げずに落とす。
     // 判定は最初の成功クエリの後にしか行えない (下記) が、一度確定した後は
-    // 毎回 5,000 件を読んでから捨てるのは無駄でしかない — Regex なら 1 回
-    // 7.7〜24.5 秒 (README の実測) を待つことになる。
+    // 毎回 5,000 件を読んでから捨てるのは無駄でしかない。
     if (m_versionChecked && !m_versionError.isEmpty()) {
         results.error = m_versionError;
         results.elapsedMs = timer.elapsed();
@@ -124,9 +123,12 @@ SearchResults EverythingBackend::search(const SearchQuery& query)
     m_api.SetSort(toEverythingSort(query.sortKey, query.sortOrder));
     // size / modified はここで一括取得する。行ごとに QFileInfo を呼ぶと
     // ディスク I/O で固まるため厳禁 (計画 5 の補足)。
+    // **ATTRIBUTES は要求しない。** 使うのは IsFolderResult() だけで、これは
+    // 結果自体が持つフォルダ判定を見るので属性を要求しなくても正しく返る
+    // (実測: 1,712 件で folder 判定は 135 件と一致)。一方で属性を要求すると
+    // IPC 1 回あたり 100ms → 170〜250ms と 2 倍前後に増える (同一クエリでの実測)。
     m_api.SetRequestFlags(EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH |
-                          EVERYTHING_REQUEST_SIZE | EVERYTHING_REQUEST_DATE_MODIFIED |
-                          EVERYTHING_REQUEST_ATTRIBUTES);
+                          EVERYTHING_REQUEST_SIZE | EVERYTHING_REQUEST_DATE_MODIFIED);
     m_api.SetOffset(0);
     m_api.SetMax(query.maxResults > 0 ? static_cast<DWORD>(query.maxResults) : 0);
 

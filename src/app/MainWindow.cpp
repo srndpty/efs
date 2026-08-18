@@ -535,8 +535,7 @@ void MainWindow::setTheme(ThemeMode mode)
 void MainWindow::onSearchStarted()
 {
     // 実行中のクエリは中断できないので、**表示だけ**を現在の query に合わせる。
-    // 古い行を残すと、検索欄はもう別の条件なのに前の結果が操作できてしまう
-    // (Everything の regex 検索は 20 秒以上かかることがある。README の実測)。
+    // 古い行を残すと、検索欄はもう別の条件なのに前の結果が操作できてしまう。
     m_model->setRows({});
     // 前回の失敗は「今の検索」の状態ではないので下ろす。
     m_backendError.clear();
