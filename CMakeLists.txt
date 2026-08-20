@@ -67,6 +67,8 @@ add_library(efs_core STATIC
     src/core/FileKinds.cpp
     src/core/Formatting.h
     src/core/Formatting.cpp
+    src/core/MatchHighlight.h
+    src/core/MatchHighlight.cpp
     src/core/PathUtils.h
     src/core/PathUtils.cpp
     src/backend/everything/EverythingApi.h

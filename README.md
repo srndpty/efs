@@ -7,7 +7,7 @@ Everything を検索エンジンとして使う Windows 向けファイル検索
 右クリックメニュー) に加えて、設定の永続化、テーマ切替 (System / Dark / Light)、
 backend error の非モーダル表示、Regex の構文警告、結果行のファイル種別アイコン、
 `windeployqt` による配布ディレクトリ生成、さらにタスクトレイ常駐 /
-グローバルホットキー / 多重起動防止 / `Program Files` への配置スクリプトまで動く。
+グローバルホットキー / 多重起動防止 / 配置スクリプトまで動く。
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
 この README には実測で確定した事実だけを記録する。
 開発上の規約は [AGENTS.md](./AGENTS.md) を参照。
@@ -100,7 +100,7 @@ QtTest は 1 実行ファイルにつき 1 つの `QTEST_MAIN` しか置けな�
 | カバレッジ | OpenCppCoverage — `pwsh scripts/coverage.ps1` (要 `winget install OpenCppCoverage.OpenCppCoverage`) |
 | pre-commit | `pre-commit install` で有効化。整形と基本的な衛生チェックのみ |
 | 配布 | `pwsh scripts/package.ps1` — Release ビルド + `windeployqt` + `Everything64.dll` |
-| インストール | `pwsh scripts/install.ps1` — `dist\efs` を `Program Files` へ配置 + ショートカット (管理者権限が要る) |
+| インストール | `pwsh scripts/install.ps1` — `dist\efs` を `%LOCALAPPDATA%\Programs\efs` へ配置 + ショートカット (昇格不要) |
 | CI | `.github/workflows/ci.yml` — format / build & test (Debug・Release) / lint / coverage / package |
 
 CI 上には Everything が存在しないため、IPC を伴うテストは `QSKIP` される。
@@ -396,8 +396,8 @@ pwsh scripts/install.ps1 -NoStartup           # ログオン時の自動起動�
 pwsh scripts/install.ps1 -Uninstall
 ```
 
-`dist\efs` を `%ProgramFiles%\efs` へコピーし、スタートメニューと (既定では)
-スタートアップにショートカットを作る。スタートアップのショートカットだけは
+`dist\efs` を `%LOCALAPPDATA%\Programs\efs` へコピーし、スタートメニューと
+(既定では) スタートアップにショートカットを作る。スタートアップのショートカットだけは
 `--tray` を渡し、ログオン時にウィンドウを出さずトレイに常駐させる
 (「起動時に隠す」ための設定項目は増やさない)。
 
@@ -412,6 +412,26 @@ pwsh scripts/install.ps1 -Uninstall
   **ショートカット作成の失敗も rollback 対象**で、既存の `.lnk` は先に退避して
   おき、元が無かったものは消して戻す。staging と backup は配置先と同じ親に置く
   (別ボリュームだと move がコピーになり、入れ替えの性質が変わる)。
+- **`-Uninstall` が消すショートカットは、その `-Destination` を指していると
+  確認できたものだけ (fail-closed)。** `.lnk` の path は配置先に依らず同じ
+  (ユーザープロファイル配下) なので、古い `Program Files` 側を消すつもりの
+  `-Uninstall` が、生きている `%LOCALAPPDATA%` 側のショートカットを巻き添えに
+  しないようにしてある。照合は実行中プロセスと同じく `<Destination>\efs.exe`
+  との完全一致で、**参照先を読めない / 空の `.lnk` は消さずに残す** — 壊れた
+  `.lnk` を「参照先が空 = 自分のもの」と扱うと巻き添えの経路が復活するため。
+- **配置先以外の場所から efs が常駐しているときは、既存 install / ショートカット /
+  staging / backup のいずれにも触らずに中止する** (書き込み可否の probe だけは
+  済んでいる)。single instance は「同じログオンセッションで efs は 1 つ」を前提に
+  しているので、旧 `Program Files` 版が常駐したまま新しい場所へ入れると、実体と
+  ショートカットは新版なのに多重起動防止の primary は旧版のまま — 起動しても
+  旧版が前へ出てくる。**見つけても kill はしない** (設定の保存を飛ばす)。実行中の
+  path と `--quit` の手順を出して非ゼロで終わる。path を読めないプロセスも
+  「別物ではない」と確認できていないので同じ扱い。
+- **efs を探す範囲は現在のログオンセッションだけ。** 多重起動防止の authority は
+  `Local\efs.single-instance` mutex であり、`Local\` はログオンセッション単位の
+  名前空間 (別ユーザーのログオン / RDP / サービスの efs は mutex の相手ではない)。
+  `-Uninstall` や上書き時の `--quit` → timeout kill が、無関係な別セッションの
+  同一 path の efs を巻き添えにしないようにしている。
 - **ショートカットとして扱うのは `.lnk` ファイル (Leaf) だけ。** その path に
   ディレクトリ等が居座っている場合は「正常な既存ショートカット」とみなさず
   退避もしない (戻すべき中身が無い)。復元は**型を問わず取り除いてからコピー**し、
@@ -430,10 +450,13 @@ pwsh scripts/install.ps1 -Uninstall
   手動復旧の手順 (backup の path) を出して非ゼロで終わる。作業ディレクトリを
   消すのは rollback の完了を確認できたときだけ — でないと、transaction が
   失敗したときに復旧に使える最後の正常なコピーまで失う。
-- 事前確認は「管理者かどうか」ではなく**実際に書けるか**。`-Destination` に
-  ユーザー書き込み可能な場所を指せば、昇格なしでスクリプト自体を検証できる。
-  ショートカット 2 つはユーザープロファイル配下なので、昇格が要るのは
-  `Program Files` へのコピーだけ。
+- **配置先の既定はユーザー領域 (`%LOCALAPPDATA%\Programs\efs`) で、昇格は要らない。**
+  当初は `%ProgramFiles%\efs` だったが、更新のたびに管理者ターミナルを開き直す
+  運用のコストの方が大きかったので既定を移した (個人用ツールであり、全ユーザーへ
+  入れる理由が無い — VS Code 等の per-user インストールと同じ場所)。
+  事前確認は「管理者かどうか」ではなく**実際に書けるか**なので、`-Destination` に
+  `%ProgramFiles%\efs` を指したときだけ昇格して実行すればよい。ショートカット
+  2 つは元からユーザープロファイル配下。
 - **設定は `%APPDATA%\efs\efs.ini` のまま。インストール先には何も書かない。**
   だから非管理者でも普通に使えるし、アンインストールしても設定は残る。
   設定を exe の隣に置く「ポータブル版」は作らない。

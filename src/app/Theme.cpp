@@ -33,6 +33,8 @@ struct Colors {
     const char* checked; // チェック済みツールバーボタンの地
     const char* checkedBorder;
     const char* hover;
+    const char* matchBackground; // 検索クエリに一致した部分の地
+    const char* matchText;
 };
 
 constexpr Colors kDark{
@@ -50,6 +52,8 @@ constexpr Colors kDark{
     .checked = "#094771",
     .checkedBorder = "#0a84ff",
     .hover = "#37373d",
+    .matchBackground = "#ffd54f",
+    .matchText = "#1a1a1a",
 };
 
 constexpr Colors kLight{
@@ -67,6 +71,8 @@ constexpr Colors kLight{
     .checked = "#cfe3f7",
     .checkedBorder = "#0a6ed1",
     .hover = "#dcdcdc",
+    .matchBackground = "#ffe066",
+    .matchText = "#1a1a1a",
 };
 
 QPalette paletteFor(const Colors& c)
@@ -134,6 +140,14 @@ bool resolveDark(ThemeMode mode)
     }
     // OS の配色。Unknown のときは既定 (Dark) 側へ倒す。
     return QGuiApplication::styleHints()->colorScheme() != Qt::ColorScheme::Light;
+}
+
+MatchColors matchColors(const QPalette& palette)
+{
+    // 明暗は palette の Base (結果テーブルの地) から判定する。テーマ適用は
+    // applyTheme() が済ませているので、ここが唯一の入力でよい。
+    const Colors& colors = palette.color(QPalette::Base).lightness() < 128 ? kDark : kLight;
+    return {.background = QColor(colors.matchBackground), .text = QColor(colors.matchText)};
 }
 
 void applyTheme(QApplication& app, ThemeMode mode)

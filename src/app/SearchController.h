@@ -69,6 +69,11 @@ public:
 
     [[nodiscard]] SearchOptions options() const;
 
+    // 表示中の結果を生んだ検索条件 (読み取り専用)。
+    // 結果一覧の強調表示が「同じ条件」で照合するために要る。UI が状態を
+    // 書き換える経路は増やさない — 変更は今までどおり setter を通す。
+    [[nodiscard]] const SearchQuery& query() const { return m_query; }
+
     [[nodiscard]] FileKind kind() const { return m_query.kind; }
     [[nodiscard]] bool regex() const { return m_query.regex; }
     [[nodiscard]] SortKey sortKey() const { return m_query.sortKey; }

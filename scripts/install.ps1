@@ -1,9 +1,13 @@
-# dist\efs を Program Files へ配置し、ショートカットを作る (Phase 4)。
+# dist\efs を配置し、ショートカットを作る (Phase 4)。
 #
 #   pwsh scripts/install.ps1              # インストール / 上書き更新
 #   pwsh scripts/install.ps1 -Uninstall   # 削除
 #
-# **管理者権限が必要** (Program Files へ書くため)。
+# **昇格は不要。** 既定の配置先はユーザー領域 (`%LOCALAPPDATA%\Programs\efs`) で、
+# ショートカット 2 つもユーザープロファイル配下なので、どれも管理者権限なしで
+# 書ける。個人用ツールであり全ユーザーへ入れる理由が無いので、UAC を毎回
+# 通す運用の方が実害が大きい (VS Code 等の per-user インストールと同じ場所)。
+# `-Destination` に Program Files を指したときだけ昇格して実行すること。
 #
 # インストーラ (MSI / MSIX / NSIS / WiX) は作らない — 個人用ツールであり、
 # 未署名インストーラの SmartScreen 警告を避けられるこの方式で足りる
@@ -20,8 +24,8 @@
 param(
     # 配置元。既定は scripts/package.ps1 の出力。
     [string]$Source,
-    # 配置先。
-    [string]$Destination = "$env:ProgramFiles\efs",
+    # 配置先。既定はユーザー領域 (昇格が要らない)。
+    [string]$Destination = "$env:LOCALAPPDATA\Programs\efs",
     # ログオン時に --tray で自動起動するショートカットを作らない。
     [switch]$NoStartup,
     [switch]$Uninstall
@@ -31,6 +35,19 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Source) { $Source = Join-Path $repo 'dist\efs' }
+
+# efs を探す範囲。**同じログオンセッションだけ**を見る。
+#
+# 多重起動防止の authority は `Local\efs.single-instance` mutex (SingleInstance.cpp)
+# で、`Local\` はログオンセッション単位の名前空間。別セッション (別ユーザーの
+# ログオン、RDP、サービス) の efs は mutex の相手ではないので、こちらの
+# インストールを妨げないし、**止めてよい相手でもない**。
+$currentSessionId = (Get-Process -Id $PID).SessionId
+
+function Get-SessionEfsProcesses {
+    return @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue |
+        Where-Object { $_.SessionId -eq $currentSessionId })
+}
 
 # 相対パスや `..` を含んだままだと後の比較 (実行中プロセスの照合) がずれる。
 function Get-NormalizedPath([string]$path) {
@@ -48,7 +65,7 @@ $shortcutBackupDir = Join-Path $env:TEMP "efs-install-shortcuts-$PID"
 
 # ショートカットはどちらもユーザープロファイル配下に置く。個人用ツールなので
 # 全ユーザーへ入れる必要が無く、この 2 つは管理者権限なしで作れる
-# (昇格が要るのは Program Files へのコピーだけ)。
+# (昇格が要るのは -Destination にシステム領域を指したときだけ)。
 $userPrograms = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $startMenuLink = Join-Path $userPrograms 'efs.lnk'
 $startupLink = Join-Path $userPrograms 'Startup\efs.lnk'
@@ -80,9 +97,11 @@ function Test-Writable([string]$path) {
 
 if (-not (Test-Writable $Destination)) {
     throw @"
-$Destination へ書き込めない (Program Files なら管理者権限が必要)。
-管理者の PowerShell で実行すること:
-  Start-Process pwsh -Verb RunAs -ArgumentList '-NoExit','-File','$PSCommandPath'
+$Destination へ書き込めない (Program Files 等のシステム領域なら管理者権限が必要)。
+既定のユーザー領域 ($env:LOCALAPPDATA\Programs\efs) へ入れるなら -Destination を外す:
+  pwsh scripts/install.ps1
+そこへ入れたいなら昇格して実行すること:
+  Start-Process pwsh -Verb RunAs -ArgumentList '-NoExit','-File','$PSCommandPath','-Destination','$Destination'
 "@
 }
 
@@ -94,12 +113,34 @@ function Test-InstallContents([string]$root) {
     }
 }
 
+# **削除するのは配置先を指しているものだけ。** ショートカットの path は配置先に
+# 依らず同じ (ユーザープロファイル配下) なので、-Destination だけ違う別の
+# インストールを消したときに、生きている方のショートカットを巻き添えにしない。
+# 照合は実行中プロセスと同じく `<Destination>\efs.exe` との完全一致。
 function Remove-Shortcuts {
+    $target = Get-NormalizedPath $installedExe
+    $shell = New-Object -ComObject WScript.Shell
     foreach ($link in @($startMenuLink, $startupLink)) {
-        if (Test-Path $link) {
-            Write-Host "ショートカットを削除: $link"
-            Remove-Item -Force $link
+        if (-not (Test-Path $link -PathType Leaf)) { continue }
+
+        # **fail-closed。** 参照先を確認できたものだけ消す。読めない / 空 /
+        # 別 path はいずれも「自分のものだと確認できなかった」として残す。
+        # 壊れた .lnk を「参照先が空 = 自分のもの」と扱うと、別のインストールの
+        # ショートカットを巻き添えにする経路が復活する。
+        $targetPath = $null
+        try { $targetPath = $shell.CreateShortcut($link).TargetPath } catch { $targetPath = $null }
+
+        if ([string]::IsNullOrWhiteSpace($targetPath)) {
+            Write-Host "ショートカットの参照先を確認できないので残す: $link"
+            continue
         }
+        if (-not (Get-NormalizedPath $targetPath).Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "ショートカットは別のインストールを指しているので残す: $link → $targetPath"
+            continue
+        }
+
+        Write-Host "ショートカットを削除: $link"
+        Remove-Item -Force $link
     }
 }
 
@@ -109,8 +150,10 @@ function Remove-Shortcuts {
 function Stop-RunningEfs {
     # 照合は「配置先の efs.exe そのもの」との完全一致。前方一致にすると
     # `C:\Program Files\efs-old\efs.exe` のような別物まで巻き込む。
+    # 対象は同じログオンセッションのプロセスだけ — 別セッションの efs を
+    # 10 秒後に kill するのは、こちらのインストールとは無関係な巻き添え。
     $target = Get-NormalizedPath $installedExe
-    $running = @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue | Where-Object {
+    $running = @(Get-SessionEfsProcesses | Where-Object {
             $_.Path -and (Get-NormalizedPath $_.Path).Equals($target, [StringComparison]::OrdinalIgnoreCase)
         })
     if ($running.Count -eq 0) { return }
@@ -128,6 +171,43 @@ function Stop-RunningEfs {
         $process.Kill()
         $null = $process.WaitForExit(5000)
     }
+}
+
+# 配置先**以外**の場所から efs が常駐していないか。
+#
+# single instance は「同じログオンセッションで efs は 1 つ」を前提に組んである
+# (トレイ / グローバルホットキー / `--quit` はどれもそれで初めて意味を持つ)。
+# したがって見るのも同じセッションのプロセスだけ。旧 `Program Files` 版が
+# 常駐したまま新しい既定の場所へ入れると、実体とショートカットは新版なのに mutex の
+# primary は旧版のまま — 起動しても旧版が前へ出てきて、入れ替えたつもりが効かない。
+#
+# **kill しない。** 設定の保存 (quitApplication) を飛ばすうえ、ユーザーが意図して
+# 使っている可能性がある。診断を出し、**既存のインストール / ショートカット /
+# staging / backup のいずれにも触らずに**中止する (書き込み可否の probe だけは
+# 済んでいる)。path を読めないプロセスも「別物ではない」と確認できていないので
+# 同じ扱いにする。
+function Assert-NoForeignEfs {
+    $target = Get-NormalizedPath $installedExe
+    $foreign = @(Get-SessionEfsProcesses | Where-Object {
+            -not ($_.Path -and (Get-NormalizedPath $_.Path).Equals($target, [StringComparison]::OrdinalIgnoreCase))
+        })
+    if ($foreign.Count -eq 0) { return }
+
+    $lines = ($foreign | ForEach-Object {
+            $path = if ($_.Path) { $_.Path } else { '(path を読めない)' }
+            "  pid $($_.Id): $path"
+        }) -join "`n"
+    $quitHint = ($foreign | Where-Object { $_.Path } | ForEach-Object { "  & '$($_.Path)' --quit" }) -join "`n"
+    if (-not $quitHint) { $quitHint = '  (path を読めないので手動で終了させること)' }
+
+    throw @"
+配置先とは別の場所の efs が実行中:
+$lines
+$Destination へ入れる前に終了させること (同じログオンセッションで efs は 1 つなので、
+このまま入れても多重起動防止の primary は実行中の方のままで、新しく入れた方は
+起動しても前へ出てこない):
+$quitHint
+"@
 }
 
 # --- アンインストール ---------------------------------------------------------
@@ -239,6 +319,10 @@ function Remove-WorkingDirs {
         if (Test-Path $dir) { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue }
     }
 }
+
+# **既存 install / shortcuts / staging / backup に触る前の前提条件。**
+# 作業ディレクトリの掃除より前に見る。
+Assert-NoForeignEfs
 
 # 前回の作業ディレクトリが残っていたら (異常終了した等) 邪魔なので消す。
 Remove-WorkingDirs
