@@ -36,6 +36,19 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Source) { $Source = Join-Path $repo 'dist\efs' }
 
+# efs を探す範囲。**同じログオンセッションだけ**を見る。
+#
+# 多重起動防止の authority は `Local\efs.single-instance` mutex (SingleInstance.cpp)
+# で、`Local\` はログオンセッション単位の名前空間。別セッション (別ユーザーの
+# ログオン、RDP、サービス) の efs は mutex の相手ではないので、こちらの
+# インストールを妨げないし、**止めてよい相手でもない**。
+$currentSessionId = (Get-Process -Id $PID).SessionId
+
+function Get-SessionEfsProcesses {
+    return @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue |
+        Where-Object { $_.SessionId -eq $currentSessionId })
+}
+
 # 相対パスや `..` を含んだままだと後の比較 (実行中プロセスの照合) がずれる。
 function Get-NormalizedPath([string]$path) {
     try { return [System.IO.Path]::GetFullPath($path) } catch { return $path }
@@ -137,8 +150,10 @@ function Remove-Shortcuts {
 function Stop-RunningEfs {
     # 照合は「配置先の efs.exe そのもの」との完全一致。前方一致にすると
     # `C:\Program Files\efs-old\efs.exe` のような別物まで巻き込む。
+    # 対象は同じログオンセッションのプロセスだけ — 別セッションの efs を
+    # 10 秒後に kill するのは、こちらのインストールとは無関係な巻き添え。
     $target = Get-NormalizedPath $installedExe
-    $running = @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue | Where-Object {
+    $running = @(Get-SessionEfsProcesses | Where-Object {
             $_.Path -and (Get-NormalizedPath $_.Path).Equals($target, [StringComparison]::OrdinalIgnoreCase)
         })
     if ($running.Count -eq 0) { return }
@@ -160,17 +175,20 @@ function Stop-RunningEfs {
 
 # 配置先**以外**の場所から efs が常駐していないか。
 #
-# single instance は「この PC で efs は 1 つ」を前提に組んである (トレイ / グローバル
-# ホットキー / `--quit` はどれもそれで初めて意味を持つ)。旧 `Program Files` 版が
+# single instance は「同じログオンセッションで efs は 1 つ」を前提に組んである
+# (トレイ / グローバルホットキー / `--quit` はどれもそれで初めて意味を持つ)。
+# したがって見るのも同じセッションのプロセスだけ。旧 `Program Files` 版が
 # 常駐したまま新しい既定の場所へ入れると、実体とショートカットは新版なのに mutex の
 # primary は旧版のまま — 起動しても旧版が前へ出てきて、入れ替えたつもりが効かない。
 #
 # **kill しない。** 設定の保存 (quitApplication) を飛ばすうえ、ユーザーが意図して
-# 使っている可能性がある。診断を出して**何にも触る前に**中止する。
-# path を読めないプロセスも「別物ではない」と確認できていないので同じ扱いにする。
+# 使っている可能性がある。診断を出し、**既存のインストール / ショートカット /
+# staging / backup のいずれにも触らずに**中止する (書き込み可否の probe だけは
+# 済んでいる)。path を読めないプロセスも「別物ではない」と確認できていないので
+# 同じ扱いにする。
 function Assert-NoForeignEfs {
     $target = Get-NormalizedPath $installedExe
-    $foreign = @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue | Where-Object {
+    $foreign = @(Get-SessionEfsProcesses | Where-Object {
             -not ($_.Path -and (Get-NormalizedPath $_.Path).Equals($target, [StringComparison]::OrdinalIgnoreCase))
         })
     if ($foreign.Count -eq 0) { return }
@@ -185,8 +203,9 @@ function Assert-NoForeignEfs {
     throw @"
 配置先とは別の場所の efs が実行中:
 $lines
-$Destination へ入れる前に終了させること (このまま入れても、多重起動防止の primary は
-実行中の方のままで、新しく入れた方は起動しても前へ出てこない):
+$Destination へ入れる前に終了させること (同じログオンセッションで efs は 1 つなので、
+このまま入れても多重起動防止の primary は実行中の方のままで、新しく入れた方は
+起動しても前へ出てこない):
 $quitHint
 "@
 }
@@ -301,7 +320,8 @@ function Remove-WorkingDirs {
     }
 }
 
-# **ここから先は何も触らない前提条件。** 作業ディレクトリの掃除より前に見る。
+# **既存 install / shortcuts / staging / backup に触る前の前提条件。**
+# 作業ディレクトリの掃除より前に見る。
 Assert-NoForeignEfs
 
 # 前回の作業ディレクトリが残っていたら (異常終了した等) 邪魔なので消す。

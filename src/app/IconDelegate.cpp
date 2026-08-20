@@ -194,11 +194,12 @@ void IconDelegate::setHighlighter(MatchHighlighter highlighter, bool matchPath)
 void IconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
                          const QModelIndex& index) const
 {
-    // 強調する余地があるのは、ユーザーの入力と照合される 2 列だけ。
-    // Size / Date Modified はクエリの対象ではない。
-    const bool matchable =
-        !m_highlighter.isEmpty() && (index.column() == ResultTableModel::ColumnName ||
-                                     index.column() == ResultTableModel::ColumnPath);
+    // 強調する余地があるのは、backend が実際に照合した列だけ。Size / Date Modified
+    // はそもそもクエリの対象ではなく、Path 列も matchPath が有効なときだけ
+    // (見た目の文字列一致と、検索条件が当たった箇所を混同しない)。
+    const bool matchable = !m_highlighter.isEmpty() &&
+                           (index.column() == ResultTableModel::ColumnName ||
+                            (m_matchPath && index.column() == ResultTableModel::ColumnPath));
     if (!matchable) {
         QStyledItemDelegate::paint(painter, option, index);
         return;

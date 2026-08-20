@@ -176,12 +176,14 @@ void TestEverythingBackend::searchReturnsMetadata()
             QCOMPARE(row.size, qint64(-1)); // ディレクトリのサイズは表示しない
         else if (row.size >= 0)
             ++withSize;
-        if (row.modified.isValid()) {
+        // **更新日時の「もっともらしさ」は検査しない。** 実データにはツールが
+        // 展開したまま mtime を設定しなかったファイルが普通に存在し (実測:
+        // 265MB の claude.exe が 1970-01-01T09:00 = epoch 0)、「1980 年以降」の
+        // ような閾値は FILETIME 変換の契約ではなくインデックスの中身に依存する。
+        // 変換の正しさの authority は synthetic な fileTimeToDateTime() の方。
+        // ここで見るのは「metadata を取得できているか」だけにする。
+        if (row.modified.isValid())
             ++withDate;
-            // 1980 年より前 / 未来すぎる値は変換ミスを疑う。
-            QVERIFY(row.modified.date().year() >= 1980);
-            QVERIFY(row.modified < QDateTime::currentDateTime().addYears(1));
-        }
     }
     QVERIFY(withSize > 0);
     QVERIFY(withDate > 0);
