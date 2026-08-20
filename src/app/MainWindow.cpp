@@ -11,6 +11,7 @@
 #include "app/Theme.h"
 #include "app/ToolbarIcons.h"
 #include "core/Formatting.h"
+#include "core/MatchHighlight.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -127,6 +128,13 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
 
     m_model = new ResultTableModel(this);
 
+    // アイコンと強調表示を担う delegate。**buildTable() より前に作る。**
+    // 下の connect の相手 (onSearchStarted / onCleared) が restoreOptions() の
+    // 中から同期に呼ばれるため、その時点で存在している必要がある。
+    // view へ差し込むのは buildTable()。
+    m_iconCache = new IconCache(&shellIconImage, this);
+    m_iconDelegate = new IconDelegate(m_iconCache, this);
+
     // controller はツールバー構築より先に必要 (action が状態を読む)。
     m_controller =
         new SearchController(std::move(backend), SearchController::kDefaultDebounceMs, this);
@@ -134,7 +142,7 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
     // **接続とステータスの初期化は restoreOptions() より先に行う。**
     // searchStarted は dispatch の中で同期に発火するので、後から繋ぐと復元時の
     // 初回クエリだけ "Searching…" を取りこぼす。ここで繋ぐ相手 (m_model /
-    // statusBar / m_messageLabel) はすべて生成済み。
+    // statusBar / m_messageLabel / m_iconDelegate) はすべて生成済み。
     connect(m_controller, &SearchController::searchStarted, this, &MainWindow::onSearchStarted);
     connect(m_controller, &SearchController::resultsReady, this, &MainWindow::onResultsReady);
     connect(m_controller, &SearchController::cleared, this, &MainWindow::onCleared);
@@ -414,8 +422,7 @@ void MainWindow::buildTable()
 
     // アイコン。lookup は種別 (ディレクトリ / 拡張子) 単位で専用スレッド 1 本に
     // 出し、結果は cache へ入る。**paint / data() から実ファイルを見に行かない。**
-    m_iconCache = new IconCache(&shellIconImage, this);
-    m_iconDelegate = new IconDelegate(m_iconCache, this);
+    // cache / delegate 自体は ctor の先頭で生成済み (上の理由)。
     m_tableView->setItemDelegate(m_iconDelegate);
     // 完了通知は行番号を持たない。viewport を塗り直すだけなので、通知が届いた
     // 時点でモデルが reset 済みでも / 行が消えていても不整合が起きない。
@@ -537,6 +544,10 @@ void MainWindow::onSearchStarted()
     // 実行中のクエリは中断できないので、**表示だけ**を現在の query に合わせる。
     // 古い行を残すと、検索欄はもう別の条件なのに前の結果が操作できてしまう。
     m_model->setRows({});
+    // 強調する条件も同じ query に揃える (行と照合器が食い違わないように、
+    // 結果の到着時ではなく発行時に差し替える)。
+    const SearchQuery& query = m_controller->query();
+    m_iconDelegate->setHighlighter(MatchHighlighter(query.text, query.regex, query.matchCase));
     // 前回の失敗は「今の検索」の状態ではないので下ろす。
     m_backendError.clear();
     statusBar()->showMessage(QStringLiteral("Searching…"));
@@ -563,6 +574,7 @@ void MainWindow::onResultsReady(const efs::SearchResults& results)
 void MainWindow::onCleared()
 {
     m_model->setRows({});
+    m_iconDelegate->setHighlighter({});
     m_backendError.clear();
     statusBar()->showMessage(QStringLiteral("Ready"));
     updateMessage();

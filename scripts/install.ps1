@@ -1,9 +1,13 @@
-# dist\efs を Program Files へ配置し、ショートカットを作る (Phase 4)。
+# dist\efs を配置し、ショートカットを作る (Phase 4)。
 #
 #   pwsh scripts/install.ps1              # インストール / 上書き更新
 #   pwsh scripts/install.ps1 -Uninstall   # 削除
 #
-# **管理者権限が必要** (Program Files へ書くため)。
+# **昇格は不要。** 既定の配置先はユーザー領域 (`%LOCALAPPDATA%\Programs\efs`) で、
+# ショートカット 2 つもユーザープロファイル配下なので、どれも管理者権限なしで
+# 書ける。個人用ツールであり全ユーザーへ入れる理由が無いので、UAC を毎回
+# 通す運用の方が実害が大きい (VS Code 等の per-user インストールと同じ場所)。
+# `-Destination` に Program Files を指したときだけ昇格して実行すること。
 #
 # インストーラ (MSI / MSIX / NSIS / WiX) は作らない — 個人用ツールであり、
 # 未署名インストーラの SmartScreen 警告を避けられるこの方式で足りる
@@ -20,8 +24,8 @@
 param(
     # 配置元。既定は scripts/package.ps1 の出力。
     [string]$Source,
-    # 配置先。
-    [string]$Destination = "$env:ProgramFiles\efs",
+    # 配置先。既定はユーザー領域 (昇格が要らない)。
+    [string]$Destination = "$env:LOCALAPPDATA\Programs\efs",
     # ログオン時に --tray で自動起動するショートカットを作らない。
     [switch]$NoStartup,
     [switch]$Uninstall
@@ -48,7 +52,7 @@ $shortcutBackupDir = Join-Path $env:TEMP "efs-install-shortcuts-$PID"
 
 # ショートカットはどちらもユーザープロファイル配下に置く。個人用ツールなので
 # 全ユーザーへ入れる必要が無く、この 2 つは管理者権限なしで作れる
-# (昇格が要るのは Program Files へのコピーだけ)。
+# (昇格が要るのは -Destination にシステム領域を指したときだけ)。
 $userPrograms = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $startMenuLink = Join-Path $userPrograms 'efs.lnk'
 $startupLink = Join-Path $userPrograms 'Startup\efs.lnk'
@@ -80,9 +84,11 @@ function Test-Writable([string]$path) {
 
 if (-not (Test-Writable $Destination)) {
     throw @"
-$Destination へ書き込めない (Program Files なら管理者権限が必要)。
-管理者の PowerShell で実行すること:
-  Start-Process pwsh -Verb RunAs -ArgumentList '-NoExit','-File','$PSCommandPath'
+$Destination へ書き込めない (Program Files 等のシステム領域なら管理者権限が必要)。
+既定のユーザー領域 ($env:LOCALAPPDATA\Programs\efs) へ入れるなら -Destination を外す:
+  pwsh scripts/install.ps1
+そこへ入れたいなら昇格して実行すること:
+  Start-Process pwsh -Verb RunAs -ArgumentList '-NoExit','-File','$PSCommandPath','-Destination','$Destination'
 "@
 }
 
@@ -94,12 +100,23 @@ function Test-InstallContents([string]$root) {
     }
 }
 
+# **削除するのは配置先を指しているものだけ。** ショートカットの path は配置先に
+# 依らず同じ (ユーザープロファイル配下) なので、-Destination だけ違う別の
+# インストールを消したときに、生きている方のショートカットを巻き添えにしない。
+# 照合は実行中プロセスと同じく `<Destination>\efs.exe` との完全一致。
 function Remove-Shortcuts {
+    $target = Get-NormalizedPath $installedExe
+    $shell = New-Object -ComObject WScript.Shell
     foreach ($link in @($startMenuLink, $startupLink)) {
-        if (Test-Path $link) {
-            Write-Host "ショートカットを削除: $link"
-            Remove-Item -Force $link
+        if (-not (Test-Path $link -PathType Leaf)) { continue }
+        $targetPath = ''
+        try { $targetPath = $shell.CreateShortcut($link).TargetPath } catch { }
+        if ($targetPath -and -not (Get-NormalizedPath $targetPath).Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "ショートカットは別のインストールを指しているので残す: $link → $targetPath"
+            continue
         }
+        Write-Host "ショートカットを削除: $link"
+        Remove-Item -Force $link
     }
 }
 

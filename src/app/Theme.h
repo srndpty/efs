@@ -8,7 +8,10 @@
 // 個別に色を持ち始めないこと。Windows 固有処理 (タイトルバー) もここへ閉じ込める。
 #pragma once
 
+#include <QColor>
+
 class QApplication;
+class QPalette;
 class QWidget;
 
 namespace efs {
@@ -27,6 +30,17 @@ enum class ThemeMode { System, Dark, Light };
 // stylesheet は毎回まるごと差し替える (setStyleSheet)。何度切り替えても
 // 累積しない。
 void applyTheme(QApplication& app, ThemeMode mode);
+
+// 検索クエリに一致した部分の地色と文字色 (結果一覧の強調表示)。
+//
+// 明暗の判定は palette から行う。ThemeMode を delegate まで引き回すと、
+// テーマ切り替えのたびに配る相手が増えていくため。
+struct MatchColors {
+    QColor background;
+    QColor text;
+};
+
+[[nodiscard]] MatchColors matchColors(const QPalette& palette);
 
 // Windows のタイトルバーの明暗。Qt の標準機構では届かない範囲なので、DWM を
 // 叩く Windows 固有処理をこの関数 1 つへ閉じ込める。

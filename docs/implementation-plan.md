@@ -585,8 +585,9 @@ Phase 3 完了時点で日常利用を開始し、**実際に使ってみて欲�
    常駐の実質的な前提 (ホットキーが無いと常駐する意味が薄い)。
 3. **多重起動防止** — 常駐アプリなので必須。2 個目の起動は既存インスタンスを
    前面に出して自分は終了する。
-4. **`Program Files` への配置** — 管理者用のコピースクリプト
-   (`scripts/install.ps1`)。**インストーラ (MSI/MSIX/NSIS/WiX) は作らない**、
+4. **配置スクリプト** — `scripts/install.ps1`。配置先の既定はユーザー領域
+   (`%LOCALAPPDATA%\Programs\efs`。当初は `Program Files` だったが、更新の
+   たびに昇格する運用のコストが上回ったので移した)。**インストーラ (MSI/MSIX/NSIS/WiX) は作らない**、
    コード署名もしない (個人用ツールであり、未署名の SmartScreen 警告を避けられる
    方式を選んだ)。
 
@@ -596,8 +597,8 @@ Everything の自動起動 / Everything 1.5 対応。
 
 確定事項:
 
-- **設定の保存先は `%APPDATA%\efs\efs.ini` のまま。** `Program Files` 配下は
-  非管理者から書けないが、efs はインストール先に書きに行かないので変更不要。
+- **設定の保存先は `%APPDATA%\efs\efs.ini` のまま。** 配置先がユーザー領域でも
+  `Program Files` でも、efs はインストール先に書きに行かないので変更不要。
   この性質を壊さないこと (設定を exe の隣へ置く「ポータブル版」は作らない)。
 - **Everything は引き続き別途常駐が必要。** efs は検索エンジンを持たない。
   Everything 側の `show_tray_icon=0` にすればトレイに出るのは efs だけになる
@@ -684,9 +685,9 @@ Everything の自動起動 / Everything 1.5 対応。
   2. ホットキーを変更する UI は作っていない。INI (`hotkey/show`) の直編集のみ。
      設定ダイアログを作らない方針は Phase 3 から変えていない。
   3. `install.ps1` は「管理者かどうか」ではなく**実際に書けるか**で事前確認する。
-     `-Destination` にユーザー書き込み可能な場所を指せば昇格なしでスクリプト自体を
-     検証できる。ショートカット 2 つ (スタートメニュー / スタートアップ) は
-     ユーザープロファイル配下なので昇格が要るのは Program Files へのコピーだけ。
+     ショートカット 2 つ (スタートメニュー / スタートアップ) はユーザープロファイル
+     配下なので、既定の配置先 (`%LOCALAPPDATA%\Programs\efs`) では昇格が一切要らない。
+     `-Destination` に `Program Files` を指したときだけ管理者権限が必要になる。
 
 ### Phase 5 — 将来 backend の受け皿 (着手は任意)
 `BackendFactory` に `NativeNtfsBackend` の空実装を追加 (`isAvailable()` は false を返す) / backend 共通の適合テストスイート (両実装が同じテストを通ることを保証) / INI の隠し設定で backend 選択。

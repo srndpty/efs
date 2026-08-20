@@ -3,11 +3,17 @@
 #include "app/IconCache.h"
 #include "app/ResultTableModel.h"
 #include "app/ShellIcon.h"
+#include "app/Theme.h"
 
 #include <QApplication>
 #include <QImage>
+#include <QPainter>
 #include <QStyle>
 #include <QStyleOptionViewItem>
+#include <QTextLayout>
+#include <QTextOption>
+
+#include <utility>
 
 namespace efs {
 
@@ -16,6 +22,17 @@ namespace {
 QPixmap toPixmap(const QImage& image)
 {
     return image.isNull() ? QPixmap() : QPixmap::fromImage(image);
+}
+
+// viewItemDrawText と同じ左右マージン。
+int textMargin(QStyle* style, const QWidget* widget)
+{
+    return style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
+}
+
+QStyle* styleFor(const QStyleOptionViewItem& option)
+{
+    return option.widget ? option.widget->style() : QApplication::style();
 }
 
 // Qt 標準の item 描画 (QCommonStyle::viewItemDrawText) は QTextLayout に
@@ -31,11 +48,9 @@ void elideTextPerCharacter(QStyleOptionViewItem* option)
         return;
 
     const QWidget* widget = option->widget;
-    QStyle* style = widget ? widget->style() : QApplication::style();
+    QStyle* style = styleFor(*option);
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, option, widget);
-    // viewItemDrawText と同じ左右マージン。
-    const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
-    const int width = textRect.width() - (2 * margin);
+    const int width = textRect.width() - (2 * textMargin(style, widget));
     if (width <= 0)
         return;
 
@@ -47,6 +62,18 @@ void elideTextPerCharacter(QStyleOptionViewItem* option)
     option->text = elided;
     // 既に収まっているので、Qt に再度省略させない (二重の "..." を防ぐ)。
     option->textElideMode = Qt::ElideNone;
+}
+
+// QCommonStyle::viewItemDrawText と同じ規則でテキスト色を選ぶ。
+QColor textColor(const QStyleOptionViewItem& option)
+{
+    QPalette::ColorGroup group =
+        (option.state & QStyle::State_Enabled) ? QPalette::Normal : QPalette::Disabled;
+    if (group == QPalette::Normal && !(option.state & QStyle::State_Active))
+        group = QPalette::Inactive;
+    return option.palette.color(group, (option.state & QStyle::State_Selected)
+                                           ? QPalette::HighlightedText
+                                           : QPalette::Text);
 }
 
 } // namespace
@@ -99,6 +126,98 @@ void IconDelegate::initStyleOption(QStyleOptionViewItem* option, const QModelInd
 
     // アイコンを入れた後で行う (装飾の分だけテキスト幅が縮むため)。
     elideTextPerCharacter(option);
+}
+
+void IconDelegate::setHighlighter(MatchHighlighter highlighter)
+{
+    m_highlighter = std::move(highlighter);
+}
+
+void IconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
+                         const QModelIndex& index) const
+{
+    // 強調する余地があるのは、ユーザーの入力と照合される 2 列だけ。
+    // Size / Date Modified はクエリの対象ではない。
+    const bool matchable =
+        !m_highlighter.isEmpty() && (index.column() == ResultTableModel::ColumnName ||
+                                     index.column() == ResultTableModel::ColumnPath);
+    if (!matchable) {
+        QStyledItemDelegate::paint(painter, option, index);
+        return;
+    }
+
+    QStyleOptionViewItem opt = option;
+    initStyleOption(&opt, index);
+    // 照合するのは**省略後**の表示文字列。実際に描く文字と位置がずれないため。
+    const QList<MatchRange> ranges = m_highlighter.ranges(opt.text);
+    if (ranges.isEmpty()) {
+        QStyledItemDelegate::paint(painter, option, index);
+        return;
+    }
+
+    // 背景・選択・交互行・アイコン・フォーカス枠は style に任せ、テキストだけ
+    // 自前で描く。style へはテキストを空にして渡す (二重描画を防ぐ)。
+    const QString text = opt.text;
+    opt.text.clear();
+    styleFor(opt)->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
+    opt.text = text;
+
+    drawHighlightedText(painter, opt, ranges);
+}
+
+void IconDelegate::drawHighlightedText(QPainter* painter, const QStyleOptionViewItem& option,
+                                       const QList<MatchRange>& ranges) const
+{
+    QStyle* style = styleFor(option);
+    QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &option, option.widget);
+    const int margin = textMargin(style, option.widget);
+    textRect.adjust(margin, 0, -margin, 0);
+    if (textRect.width() <= 0 || textRect.height() <= 0)
+        return;
+
+    QTextLayout layout(option.text, option.font);
+    QTextOption textOption;
+    textOption.setWrapMode(QTextOption::NoWrap);
+    textOption.setTextDirection(option.direction);
+    textOption.setAlignment(QStyle::visualAlignment(option.direction, option.displayAlignment));
+    layout.setTextOption(textOption);
+
+    // 太字ではなく地色で示す。ダークテーマでは字面の太さの差が読み取りにくい
+    // うえ、太字は幅が伸びて省略位置ともずれる。
+    const MatchColors colors = matchColors(option.palette);
+    QTextCharFormat highlight;
+    highlight.setBackground(colors.background);
+    highlight.setForeground(colors.text);
+
+    QList<QTextLayout::FormatRange> formats;
+    formats.reserve(ranges.size());
+    for (const MatchRange& range : ranges)
+        formats.append({range.start, range.length, highlight});
+    layout.setFormats(formats);
+
+    layout.beginLayout();
+    QTextLine line = layout.createLine();
+    if (line.isValid())
+        line.setLineWidth(textRect.width());
+    layout.endLayout();
+    if (!line.isValid())
+        return;
+
+    // 縦方向は displayAlignment に従う (既定の AlignVCenter を含む)。横方向は
+    // QTextOption 側で済んでいるので、ここでは触らない。
+    qreal y = textRect.y();
+    const Qt::Alignment vertical = option.displayAlignment & Qt::AlignVertical_Mask;
+    if (vertical & Qt::AlignBottom)
+        y += textRect.height() - line.height();
+    else if (!(vertical & Qt::AlignTop))
+        y += (textRect.height() - line.height()) / 2.0;
+
+    painter->save();
+    // 地色の矩形が隣の列へ流れ出さないようにセル内へ切り詰める。
+    painter->setClipRect(textRect, Qt::IntersectClip);
+    painter->setPen(textColor(option));
+    layout.draw(painter, QPointF(textRect.x(), y));
+    painter->restore();
 }
 
 } // namespace efs
