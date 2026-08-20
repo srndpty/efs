@@ -34,7 +34,12 @@ public:
 
     // 表示中の結果に対応するクエリを渡す。以後の paint で一致部分が強調される。
     // 検索を出した時点で呼ぶこと (行と照合器が食い違わないようにするため)。
-    void setHighlighter(MatchHighlighter highlighter);
+    //
+    // matchPath は SearchQuery の同名フィールド。強調は「backend が実際に照合した
+    // 箇所」を表すので、ファイル名だけを照合している間 (matchPath == false) は
+    // Name 列しか強調しない。Path 列に同じ文字列が見えていても、そこは検索条件が
+    // 当たった箇所ではない。matchPath を実装したときに Path 列も有効になる。
+    void setHighlighter(MatchHighlighter highlighter, bool matchPath);
 
     // IconCache::imagesReady に対して cache を捨てる必要は無い。
     // placeholder は m_pixmaps に**入れていない**ので、次の paint で
@@ -51,9 +56,6 @@ protected:
 
 private:
     [[nodiscard]] QPixmap pixmapFor(const QString& key) const;
-    // option.text (= 省略済みの表示文字列) を、一致部分に地色を敷いて描く。
-    void drawHighlightedText(QPainter* painter, const QStyleOptionViewItem& option,
-                             const QList<MatchRange>& ranges) const;
 
     IconCache* m_cache = nullptr;
     // QImage → QPixmap の変換結果 (UI スレッド専用の 2 段目のキャッシュ)。
@@ -64,6 +66,7 @@ private:
     QPixmap m_genericDirectory;
     // 空なら従来どおり QStyledItemDelegate::paint に任せる。
     MatchHighlighter m_highlighter;
+    bool m_matchPath = false;
 };
 
 } // namespace efs

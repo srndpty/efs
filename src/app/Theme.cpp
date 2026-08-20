@@ -147,7 +147,7 @@ MatchColors matchColors(const QPalette& palette)
     // 明暗は palette の Base (結果テーブルの地) から判定する。テーマ適用は
     // applyTheme() が済ませているので、ここが唯一の入力でよい。
     const Colors& colors = palette.color(QPalette::Base).lightness() < 128 ? kDark : kLight;
-    return {QColor(colors.matchBackground), QColor(colors.matchText)};
+    return {.background = QColor(colors.matchBackground), .text = QColor(colors.matchText)};
 }
 
 void applyTheme(QApplication& app, ThemeMode mode)

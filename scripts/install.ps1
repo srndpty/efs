@@ -109,12 +109,23 @@ function Remove-Shortcuts {
     $shell = New-Object -ComObject WScript.Shell
     foreach ($link in @($startMenuLink, $startupLink)) {
         if (-not (Test-Path $link -PathType Leaf)) { continue }
-        $targetPath = ''
-        try { $targetPath = $shell.CreateShortcut($link).TargetPath } catch { }
-        if ($targetPath -and -not (Get-NormalizedPath $targetPath).Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+
+        # **fail-closed。** 参照先を確認できたものだけ消す。読めない / 空 /
+        # 別 path はいずれも「自分のものだと確認できなかった」として残す。
+        # 壊れた .lnk を「参照先が空 = 自分のもの」と扱うと、別のインストールの
+        # ショートカットを巻き添えにする経路が復活する。
+        $targetPath = $null
+        try { $targetPath = $shell.CreateShortcut($link).TargetPath } catch { $targetPath = $null }
+
+        if ([string]::IsNullOrWhiteSpace($targetPath)) {
+            Write-Host "ショートカットの参照先を確認できないので残す: $link"
+            continue
+        }
+        if (-not (Get-NormalizedPath $targetPath).Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
             Write-Host "ショートカットは別のインストールを指しているので残す: $link → $targetPath"
             continue
         }
+
         Write-Host "ショートカットを削除: $link"
         Remove-Item -Force $link
     }
@@ -145,6 +156,39 @@ function Stop-RunningEfs {
         $process.Kill()
         $null = $process.WaitForExit(5000)
     }
+}
+
+# 配置先**以外**の場所から efs が常駐していないか。
+#
+# single instance は「この PC で efs は 1 つ」を前提に組んである (トレイ / グローバル
+# ホットキー / `--quit` はどれもそれで初めて意味を持つ)。旧 `Program Files` 版が
+# 常駐したまま新しい既定の場所へ入れると、実体とショートカットは新版なのに mutex の
+# primary は旧版のまま — 起動しても旧版が前へ出てきて、入れ替えたつもりが効かない。
+#
+# **kill しない。** 設定の保存 (quitApplication) を飛ばすうえ、ユーザーが意図して
+# 使っている可能性がある。診断を出して**何にも触る前に**中止する。
+# path を読めないプロセスも「別物ではない」と確認できていないので同じ扱いにする。
+function Assert-NoForeignEfs {
+    $target = Get-NormalizedPath $installedExe
+    $foreign = @(Get-Process -Name 'efs' -ErrorAction SilentlyContinue | Where-Object {
+            -not ($_.Path -and (Get-NormalizedPath $_.Path).Equals($target, [StringComparison]::OrdinalIgnoreCase))
+        })
+    if ($foreign.Count -eq 0) { return }
+
+    $lines = ($foreign | ForEach-Object {
+            $path = if ($_.Path) { $_.Path } else { '(path を読めない)' }
+            "  pid $($_.Id): $path"
+        }) -join "`n"
+    $quitHint = ($foreign | Where-Object { $_.Path } | ForEach-Object { "  & '$($_.Path)' --quit" }) -join "`n"
+    if (-not $quitHint) { $quitHint = '  (path を読めないので手動で終了させること)' }
+
+    throw @"
+配置先とは別の場所の efs が実行中:
+$lines
+$Destination へ入れる前に終了させること (このまま入れても、多重起動防止の primary は
+実行中の方のままで、新しく入れた方は起動しても前へ出てこない):
+$quitHint
+"@
 }
 
 # --- アンインストール ---------------------------------------------------------
@@ -256,6 +300,9 @@ function Remove-WorkingDirs {
         if (Test-Path $dir) { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue }
     }
 }
+
+# **ここから先は何も触らない前提条件。** 作業ディレクトリの掃除より前に見る。
+Assert-NoForeignEfs
 
 # 前回の作業ディレクトリが残っていたら (異常終了した等) 邪魔なので消す。
 Remove-WorkingDirs

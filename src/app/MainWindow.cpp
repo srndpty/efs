@@ -547,7 +547,8 @@ void MainWindow::onSearchStarted()
     // 強調する条件も同じ query に揃える (行と照合器が食い違わないように、
     // 結果の到着時ではなく発行時に差し替える)。
     const SearchQuery& query = m_controller->query();
-    m_iconDelegate->setHighlighter(MatchHighlighter(query.text, query.regex, query.matchCase));
+    m_iconDelegate->setHighlighter(MatchHighlighter(query.text, query.regex, query.matchCase),
+                                   query.matchPath);
     // 前回の失敗は「今の検索」の状態ではないので下ろす。
     m_backendError.clear();
     statusBar()->showMessage(QStringLiteral("Searching…"));
@@ -574,7 +575,7 @@ void MainWindow::onResultsReady(const efs::SearchResults& results)
 void MainWindow::onCleared()
 {
     m_model->setRows({});
-    m_iconDelegate->setHighlighter({});
+    m_iconDelegate->setHighlighter({}, false);
     m_backendError.clear();
     statusBar()->showMessage(QStringLiteral("Ready"));
     updateMessage();

@@ -77,12 +77,38 @@ void TestMatchHighlight::plainTerms_data()
     // 除外項に一致する部分は、そもそも結果に出ないか、強調する意味が無い。
     QTest::newRow("negated term is not highlighted")
         << QStringLiteral("!tmp") << QStringLiteral("tmp.txt") << QStringList{};
+    // 否定グループは**中身ごと**落とす。`!` / `foo` / `bar` に割ると、除外条件の
+    // はずの語を positive な一致として強調してしまう (false positive)。
+    QTest::newRow("negated group is not highlighted")
+        << QStringLiteral("!<foo bar>") << QStringLiteral("foo bar.txt") << QStringList{};
+    QTest::newRow("terms outside the negated group still highlight")
+        << QStringLiteral("!<foo bar> baz") << QStringLiteral("foo bar baz.txt")
+        << QStringList{QStringLiteral("baz")};
+    QTest::newRow("nested negated group")
+        << QStringLiteral("!<foo <bar baz>> qux") << QStringLiteral("foo bar baz qux.txt")
+        << QStringList{QStringLiteral("qux")};
+    // 閉じない否定グループは、そこから先を解釈できないものとして丸ごと捨てる。
+    QTest::newRow("unbalanced negated group drops the rest")
+        << QStringLiteral("!<foo bar") << QStringLiteral("foo bar.txt") << QStringList{};
+    QTest::newRow("positive group is still highlighted")
+        << QStringLiteral("<foo bar>") << QStringLiteral("foo bar.txt")
+        << QStringList{QStringLiteral("foo"), QStringLiteral("bar")};
+    QTest::newRow("bare negation operator is not a term")
+        << QStringLiteral("! foo") << QStringLiteral("!foo!") << QStringList{QStringLiteral("foo")};
     // ワイルドカードは名前全体との一致 (Everything と同じ)。
     QTest::newRow("wildcard matches whole name")
         << QStringLiteral("*.jpg") << QStringLiteral("IMG_0042.jpg")
         << QStringList{QStringLiteral("IMG_0042.jpg")};
     QTest::newRow("wildcard anchored, so a substring alone does not match")
         << QStringLiteral("img*") << QStringLiteral("my IMG_0042.jpg") << QStringList{};
+    // 引用の内側の `*` `?` はワイルドカードではなくただの文字。
+    QTest::newRow("quoted wildcard is literal, so it does not match anything")
+        << QStringLiteral("\"foo*bar\"") << QStringLiteral("fooXYZbar") << QStringList{};
+    QTest::newRow("quoted wildcard matches the character itself")
+        << QStringLiteral("\"foo*bar\"") << QStringLiteral("my foo*bar.txt")
+        << QStringList{QStringLiteral("foo*bar")};
+    QTest::newRow("quoted question mark is literal")
+        << QStringLiteral("\"a?c\"") << QStringLiteral("abc") << QStringList{};
     QTest::newRow("question mark is a single character")
         << QStringLiteral("a?c.txt") << QStringLiteral("abc.txt")
         << QStringList{QStringLiteral("abc.txt")};

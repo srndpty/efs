@@ -76,6 +76,63 @@ QColor textColor(const QStyleOptionViewItem& option)
                                            : QPalette::Text);
 }
 
+// option.text (= 省略済みの表示文字列) を、一致部分に地色を敷いて描く。
+// delegate の状態を見ないので自由関数にしてある。
+void drawHighlightedText(QPainter* painter, const QStyleOptionViewItem& option,
+                         const QList<MatchRange>& ranges)
+{
+    QStyle* style = styleFor(option);
+    QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &option, option.widget);
+    const int margin = textMargin(style, option.widget);
+    textRect.adjust(margin, 0, -margin, 0);
+    if (textRect.width() <= 0 || textRect.height() <= 0)
+        return;
+
+    QTextLayout layout(option.text, option.font);
+    QTextOption textOption;
+    textOption.setWrapMode(QTextOption::NoWrap);
+    textOption.setTextDirection(option.direction);
+    textOption.setAlignment(QStyle::visualAlignment(option.direction, option.displayAlignment));
+    layout.setTextOption(textOption);
+
+    // 太字ではなく地色で示す。ダークテーマでは字面の太さの差が読み取りにくい
+    // うえ、太字は幅が伸びて省略位置ともずれる。
+    const MatchColors colors = matchColors(option.palette);
+    QTextCharFormat highlight;
+    highlight.setBackground(colors.background);
+    highlight.setForeground(colors.text);
+
+    QList<QTextLayout::FormatRange> formats;
+    formats.reserve(ranges.size());
+    for (const MatchRange& range : ranges)
+        formats.append({.start = range.start, .length = range.length, .format = highlight});
+    layout.setFormats(formats);
+
+    layout.beginLayout();
+    QTextLine line = layout.createLine();
+    if (line.isValid())
+        line.setLineWidth(textRect.width());
+    layout.endLayout();
+    if (!line.isValid())
+        return;
+
+    // 縦方向は displayAlignment に従う (既定の AlignVCenter を含む)。横方向は
+    // QTextOption 側で済んでいるので、ここでは触らない。
+    qreal y = textRect.y();
+    const Qt::Alignment vertical = option.displayAlignment & Qt::AlignVertical_Mask;
+    if (vertical & Qt::AlignBottom)
+        y += textRect.height() - line.height();
+    else if (!(vertical & Qt::AlignTop))
+        y += (textRect.height() - line.height()) / 2.0;
+
+    painter->save();
+    // 地色の矩形が隣の列へ流れ出さないようにセル内へ切り詰める。
+    painter->setClipRect(textRect, Qt::IntersectClip);
+    painter->setPen(textColor(option));
+    layout.draw(painter, QPointF(textRect.x(), y));
+    painter->restore();
+}
+
 } // namespace
 
 IconDelegate::IconDelegate(IconCache* cache, QObject* parent)
@@ -128,9 +185,10 @@ void IconDelegate::initStyleOption(QStyleOptionViewItem* option, const QModelInd
     elideTextPerCharacter(option);
 }
 
-void IconDelegate::setHighlighter(MatchHighlighter highlighter)
+void IconDelegate::setHighlighter(MatchHighlighter highlighter, bool matchPath)
 {
     m_highlighter = std::move(highlighter);
+    m_matchPath = matchPath;
 }
 
 void IconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -163,61 +221,6 @@ void IconDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
     opt.text = text;
 
     drawHighlightedText(painter, opt, ranges);
-}
-
-void IconDelegate::drawHighlightedText(QPainter* painter, const QStyleOptionViewItem& option,
-                                       const QList<MatchRange>& ranges) const
-{
-    QStyle* style = styleFor(option);
-    QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &option, option.widget);
-    const int margin = textMargin(style, option.widget);
-    textRect.adjust(margin, 0, -margin, 0);
-    if (textRect.width() <= 0 || textRect.height() <= 0)
-        return;
-
-    QTextLayout layout(option.text, option.font);
-    QTextOption textOption;
-    textOption.setWrapMode(QTextOption::NoWrap);
-    textOption.setTextDirection(option.direction);
-    textOption.setAlignment(QStyle::visualAlignment(option.direction, option.displayAlignment));
-    layout.setTextOption(textOption);
-
-    // 太字ではなく地色で示す。ダークテーマでは字面の太さの差が読み取りにくい
-    // うえ、太字は幅が伸びて省略位置ともずれる。
-    const MatchColors colors = matchColors(option.palette);
-    QTextCharFormat highlight;
-    highlight.setBackground(colors.background);
-    highlight.setForeground(colors.text);
-
-    QList<QTextLayout::FormatRange> formats;
-    formats.reserve(ranges.size());
-    for (const MatchRange& range : ranges)
-        formats.append({range.start, range.length, highlight});
-    layout.setFormats(formats);
-
-    layout.beginLayout();
-    QTextLine line = layout.createLine();
-    if (line.isValid())
-        line.setLineWidth(textRect.width());
-    layout.endLayout();
-    if (!line.isValid())
-        return;
-
-    // 縦方向は displayAlignment に従う (既定の AlignVCenter を含む)。横方向は
-    // QTextOption 側で済んでいるので、ここでは触らない。
-    qreal y = textRect.y();
-    const Qt::Alignment vertical = option.displayAlignment & Qt::AlignVertical_Mask;
-    if (vertical & Qt::AlignBottom)
-        y += textRect.height() - line.height();
-    else if (!(vertical & Qt::AlignTop))
-        y += (textRect.height() - line.height()) / 2.0;
-
-    painter->save();
-    // 地色の矩形が隣の列へ流れ出さないようにセル内へ切り詰める。
-    painter->setClipRect(textRect, Qt::IntersectClip);
-    painter->setPen(textColor(option));
-    layout.draw(painter, QPointF(textRect.x(), y));
-    painter->restore();
 }
 
 } // namespace efs
