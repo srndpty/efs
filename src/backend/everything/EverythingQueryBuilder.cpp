@@ -1,6 +1,7 @@
 #include "backend/everything/EverythingQueryBuilder.h"
 
 #include "core/FileKinds.h"
+#include "core/PathUtils.h"
 
 #include <QStringList>
 
@@ -21,7 +22,9 @@ QString buildQueryString(const SearchQuery& query)
     // Regex ON ではユーザーのパターンを一字も変えない。引用の内側では前後の
     // 空白も TAB も意味を持つため (実機検証済み)、trim すると別のパターンになる。
     // Regex OFF の前後空白は Everything の項区切りでしかないので落とす。
-    const QString text = query.regex ? query.text : query.text.trimmed();
+    // 同じく Regex OFF のときだけ、`path/to/file.txt` の `/` を `\` へ揃える
+    // (Everything がパス区切りとして見るのは `\` だけ。PathUtils を参照)。
+    const QString text = query.regex ? query.text : normalizeQuerySeparators(query.text.trimmed());
     if (text.isEmpty())
         return terms.join(u' ');
 

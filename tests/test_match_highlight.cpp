@@ -74,6 +74,11 @@ void TestMatchHighlight::plainTerms_data()
     QTest::newRow("drive letter is not a function")
         << QStringLiteral("c:\\dev") << QStringLiteral("c:\\dev\\soft")
         << QStringList{QStringLiteral("c:\\dev")};
+    // `/` は EverythingQueryBuilder が `\` へ揃えて backend へ渡すので、
+    // 強調も `\` の形で照合する。
+    QTest::newRow("forward slashes match a backslash path")
+        << QStringLiteral("dev/soft") << QStringLiteral("c:\\dev\\soft")
+        << QStringList{QStringLiteral("dev\\soft")};
     // 除外項に一致する部分は、そもそも結果に出ないか、強調する意味が無い。
     QTest::newRow("negated term is not highlighted")
         << QStringLiteral("!tmp") << QStringLiteral("tmp.txt") << QStringList{};

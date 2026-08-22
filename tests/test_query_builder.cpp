@@ -51,6 +51,18 @@ void TestQueryBuilder::buildsExpectedQuery_data()
         << QStringLiteral("   ") << FileKind::All << false << QString();
     QTest::newRow("text is trimmed")
         << QStringLiteral("  report  ") << FileKind::All << false << QStringLiteral("report");
+    // `/` はパス区切りとして書かれたものと見て `\` へ揃える。Everything が
+    // パス区切りとして解釈するのは `\` だけで、そのままでは何も当たらない。
+    QTest::newRow("forward slashes become backslashes")
+        << QStringLiteral("path/to/file.txt") << FileKind::All << false
+        << QStringLiteral("path\\to\\file.txt");
+    QTest::newRow("drive path with forward slashes")
+        << QStringLiteral("C:/dev/soft") << FileKind::All << false
+        << QStringLiteral("C:\\dev\\soft");
+    // 日付の `/` はパス区切りではないので触らない。
+    QTest::newRow("date function keeps its slashes")
+        << QStringLiteral("dm:2026/01/01 report") << FileKind::All << false
+        << QStringLiteral("dm:2026/01/01 report");
     QTest::newRow("regex off keeps text verbatim")
         << QStringLiteral("^IMG_\\d+") << FileKind::All << false << QStringLiteral("^IMG_\\d+");
 
@@ -60,6 +72,10 @@ void TestQueryBuilder::buildsExpectedQuery_data()
     QTest::newRow("regex on") << QStringLiteral("^IMG_\\d+") << FileKind::All << true
                               << QStringLiteral("regex:\"^IMG_\\d+\"");
     QTest::newRow("regex on with empty text") << QString() << FileKind::All << true << QString();
+    // Regex ON はユーザーのパターンを一字も変えない。正規表現の `/` はただの
+    // 文字で、`\` はエスケープなので、入れ替えるとパターンの意味が変わる。
+    QTest::newRow("regex on keeps forward slashes")
+        << QStringLiteral("a/b") << FileKind::All << true << QStringLiteral("regex:\"a/b\"");
 
     // --- Regex ON の空白はユーザーのパターンの一部。trim してはならない --------
     // 引用の内側では前後の空白も TAB も意味を持つことを実測済み。空文字だけが
