@@ -1,5 +1,7 @@
 #include "core/MatchHighlight.h"
 
+#include "core/PathUtils.h"
+
 #include <algorithm>
 
 namespace efs {
@@ -135,7 +137,10 @@ MatchHighlighter::MatchHighlighter(const QString& queryText, bool regex, bool ma
         return;
     }
 
-    for (const Term& term : splitTerms(queryText)) {
+    // `/` は EverythingQueryBuilder が `\` へ揃えてから backend へ渡すので、
+    // 強調側も同じ形で照合する (さもないと `path/to` で検索したときだけ
+    // 当たった行に強調が付かない)。
+    for (const Term& term : splitTerms(normalizeQuerySeparators(queryText))) {
         const QRegularExpression re = patternForTerm(term, options);
         if (re.isValid() && !re.pattern().isEmpty())
             m_patterns.append(re);
