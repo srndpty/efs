@@ -142,6 +142,16 @@ void TestPathUtils::normalizesQuerySeparators_data()
         << QStringLiteral("!dm:2026/01/01") << QStringLiteral("!dm:2026/01/01");
     QTest::newRow("function term does not leak into the next term")
         << QStringLiteral("dm:2026/01/01 src/core") << QStringLiteral("dm:2026/01/01 src\\core");
+    // `foo:` 構文の途中の `<` `>` は比較演算子であってグルーピングではない。
+    QTest::newRow("greater than comparison is untouched")
+        << QStringLiteral("dm:>2026/01/01") << QStringLiteral("dm:>2026/01/01");
+    QTest::newRow("less than comparison is untouched")
+        << QStringLiteral("dm:<2026/01/01") << QStringLiteral("dm:<2026/01/01");
+    QTest::newRow("greater or equal comparison is untouched")
+        << QStringLiteral("dm:>=2026/01/01") << QStringLiteral("dm:>=2026/01/01");
+    // グループを開く `<` は項の先頭なので従来どおり区切り。
+    QTest::newRow("comparison inside a group") << QStringLiteral("<dm:>2026/01/01 src/core>")
+                                               << QStringLiteral("<dm:>2026/01/01 src\\core>");
     // 値は引用できる。引用の内側で項を切ると、値の途中から別の項と見なされて
     // 一部だけが変換されてしまう。
     QTest::newRow("quoted function value is untouched")

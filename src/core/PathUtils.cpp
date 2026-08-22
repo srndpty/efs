@@ -63,16 +63,26 @@ QString normalizeQuerySeparators(const QString& text)
             inQuote = !inQuote;
             continue;
         }
+        const auto currentTerm = [&] {
+            return QStringView(normalized).mid(termStart, i - termStart);
+        };
+
         // Everything の項区切り (空白 = AND、`|` = OR) とグルーピングの `<` `>`。
+        //
         // **引用の内側では項が切れない。** `parent:"C:/Program Files/Common Files"`
         // のように `foo:` 構文の値は引用できるため、ここで項を切ると値の途中から
         // 別の項と見なされ、一部だけが変換されてしまう。
-        if (!inQuote && (ch.isSpace() || ch == u'|' || ch == u'<' || ch == u'>')) {
+        //
+        // **`foo:` 構文の途中の `<` `>` はグルーピングではなく比較演算子**
+        // (`dm:>2026/01/01`、`dm:>=2026/01/01`)。ここで項を切ると値が別の項に
+        // なってしまい、opaque に扱う契約が崩れる。項の先頭側がまだ `foo:` で
+        // 始まっていないとき (= グループを開く `<`) は従来どおり区切りとして扱う。
+        if (!inQuote && (ch.isSpace() || ch == u'|' ||
+                         ((ch == u'<' || ch == u'>') && !startsColonSyntaxTerm(currentTerm())))) {
             termStart = i + 1;
             continue;
         }
-        if (ch == u'/' &&
-            !startsColonSyntaxTerm(QStringView(normalized).mid(termStart, i - termStart)))
+        if (ch == u'/' && !startsColonSyntaxTerm(currentTerm()))
             normalized[i] = kSeparator;
     }
     return normalized;
