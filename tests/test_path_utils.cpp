@@ -142,6 +142,20 @@ void TestPathUtils::normalizesQuerySeparators_data()
         << QStringLiteral("!dm:2026/01/01") << QStringLiteral("!dm:2026/01/01");
     QTest::newRow("function term does not leak into the next term")
         << QStringLiteral("dm:2026/01/01 src/core") << QStringLiteral("dm:2026/01/01 src\\core");
+    // 値は引用できる。引用の内側で項を切ると、値の途中から別の項と見なされて
+    // 一部だけが変換されてしまう。
+    QTest::newRow("quoted function value is untouched")
+        << QStringLiteral("parent:\"C:/Program Files/Common Files\"")
+        << QStringLiteral("parent:\"C:/Program Files/Common Files\"");
+    QTest::newRow("quoted url value is untouched")
+        << QStringLiteral("content:\"https://foo/bar baz/qux\"")
+        << QStringLiteral("content:\"https://foo/bar baz/qux\"");
+    QTest::newRow("quoted date value is untouched")
+        << QStringLiteral("dm:\"2026/01/01 12:00\"") << QStringLiteral("dm:\"2026/01/01 12:00\"");
+    // 引用が閉じた後は普通の項に戻る。
+    QTest::newRow("term after a quoted function value is normalized")
+        << QStringLiteral("parent:\"C:/Program Files\" src/core")
+        << QStringLiteral("parent:\"C:/Program Files\" src\\core");
     QTest::newRow("path function value is untouched")
         << QStringLiteral("path:C:/dev") << QStringLiteral("path:C:/dev");
 }
