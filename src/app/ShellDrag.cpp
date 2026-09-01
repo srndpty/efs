@@ -51,10 +51,10 @@ private:
 };
 
 // SHParseDisplayName で作った絶対 PIDL。
-// **ILCreateFromPathW は使わない** — 契約が MAX_PATH までであり、Everything は
-// それを超えるパスを結果に返しうる。SHParseDisplayName には長さの制限が無く、
-// 321 文字のパスで PIDL / IDataObject (CFSTR_SHELLIDLIST + CF_HDROP) まで
-// 取れることを実測した。
+// **ILCreateFromPathW は使わない** — docs 上 MAX_PATH までしか契約されておらず、
+// Everything はそれを超えるパスを結果に返しうる。SHParseDisplayName にはその
+// 制約が無く、321 文字の実在パスで PIDL / IDataObject の取得まで実測で通った
+// (「長さ無制限」を保証したわけではない)。
 //
 // **`\\?\` 前置のパスを渡さない。** その形は
 // SHParseDisplayName に E_INVALIDARG で弾かれる (これも実測)。渡すのは
@@ -62,11 +62,9 @@ private:
 class AbsolutePidl {
 public:
     AbsolutePidl() = default;
-    ~AbsolutePidl()
-    {
-        if (m_pidl != nullptr)
-            ::ILFree(m_pidl);
-    }
+    // PIDL はタスクアロケータから来るので CoTaskMemFree で返す
+    // (Windows 2000 以降はこちらが Microsoft の推奨。ILFree は等価な旧 API)。
+    ~AbsolutePidl() { ::CoTaskMemFree(m_pidl); }
 
     AbsolutePidl(const AbsolutePidl&) = delete;
     AbsolutePidl& operator=(const AbsolutePidl&) = delete;
@@ -116,9 +114,10 @@ bool startShellDrag(QWidget* source, const QString& fullPath)
     }
 
     // **Explorer が item のデータオブジェクトを取るのと同じ経路。**
-    // CF_HDROP も CFSTR_SHELLIDLIST もドラッグ画像も、Explorer がドラッグ元の
-    // ときと同じものが載る。移動でドロップされたときに元を消すのもこの
-    // オブジェクトの仕事なので、**こちらでファイルを消しに行かない**
+    // CFSTR_SHELLIDLIST と CF_HDROP が載ることは実測で確認済み。ドラッグ画像は
+    // 自前で用意せず SHDoDragDrop とシェルの既定処理に任せる。
+    // 移動でドロップされたときに元を消すのもこのオブジェクトの仕事なので、
+    // **こちらでファイルを消しに行かない**
     // (消し漏れてもコピーになるだけで、二重に消す事故は起こさない)。
     //
     // winId() は WId (quintptr) なので、HWND へ戻すには整数からポインタへの

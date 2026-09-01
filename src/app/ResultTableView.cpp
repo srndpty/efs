@@ -29,8 +29,15 @@ void ResultTableView::mousePressEvent(QMouseEvent* event)
 
 void ResultTableView::mouseMoveEvent(QMouseEvent* event)
 {
-    const bool canStart = !m_dragging && !m_pressPath.isEmpty() &&
-                          (event->buttons() & Qt::LeftButton) != 0 &&
+    // **入れ子のループからの再入はここで捨てる。** SHDoDragDrop の間も Qt の
+    // イベントは配送されるので、基底へ渡すと掴んでいる最中の move が範囲選択の
+    // ドラッグとして解釈される。
+    if (m_dragging) {
+        event->accept();
+        return;
+    }
+
+    const bool canStart = !m_pressPath.isEmpty() && (event->buttons() & Qt::LeftButton) != 0 &&
                           (event->position().toPoint() - m_pressPos).manhattanLength() >=
                               QApplication::startDragDistance();
     if (!canStart) {

@@ -432,6 +432,8 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   データオブジェクトを `SHDoDragDrop` へ渡す。受け側から見て Explorer からの
   ドロップと区別が付かないことが要件なので、`text/uri-list` や CF_HDROP を
   自前で載せる実装へ戻さない (`CFSTR_SHELLIDLIST` を見る受け側で挙動が変わる)。
+  実測で確認したのは `CFSTR_SHELLIDLIST` と CF_HDROP が載ることまで。ドラッグ
+  画像は自前で用意せず `SHDoDragDrop` とシェルの既定処理に任せる。
   Win32 は `app/ShellDrag.cpp` に閉じ込める。
 - **データオブジェクトは親フォルダの `GetUIObjectOf` から取る。**
   `SHParseDisplayName` → `SHBindToParent` → `IShellFolder::GetUIObjectOf(hwnd, 1,
@@ -441,11 +443,13 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   `SHCreateShellItemArrayFromDataObject` 由来の array に対して定義されており、
   こちらの作り方の array での成立を authority にできない。
   `SHBindToParent` が返す child PIDL は絶対 PIDL の内部を指すので**解放しない**。
-- **`ILCreateFromPathW` を使わない。** 契約が MAX_PATH までで、Everything は
-  それを超えるパスを返しうる。`SHParseDisplayName` には長さ制限が無く、321 文字の
-  パスで `IDataObject` (`CFSTR_SHELLIDLIST` + CF_HDROP) まで取れることを実測した。
-  逆に **`\\?\` を前置したパスは E_INVALIDARG で弾かれる**ので、
-  Everything が返す素のパスをそのまま渡すこと。
+- **`ILCreateFromPathW` を使わない。** docs 上 MAX_PATH までしか契約されておらず、
+  Everything はそれを超えるパスを返しうる。`SHParseDisplayName` にはその制約が
+  無く、321 文字の実在パスで PIDL / `IDataObject` の取得まで実測で通った
+  (**「長さ無制限」を保証したわけではない**)。逆に
+  **`\\?\` を前置したパスは E_INVALIDARG で弾かれる**ので、
+  Everything が返す素のパスをそのまま渡すこと。PIDL の解放は `CoTaskMemFree`
+  (Windows 2000 以降の推奨。`ILFree` は等価な旧 API)。
 - **OLE の初期化を Qt の内部実装に頼らない。** `SHDoDragDrop` は
   `OleInitialize` 済みのスレッドを要求する。`ShellDrag.cpp` 自身が RAII で
   `OleInitialize`/`OleUninitialize` を釣り合わせ、失敗したらドラッグを始めない。
@@ -465,9 +469,10 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
 - **掴む対象は押した時点で `QString` として確保する。** `SHDoDragDrop` は
   ドロップまで戻らず、その間も Qt のイベントが配送されるので、`QModelIndex` を
   持ったままだと検索結果の到着でモデルが reset され、別の行 (あるいは消えた行) を
-  落とすことになる。同じ理由で入れ子のループからの再入を `m_dragging` で止める。
-- **ドラッグを始めた `mouseMoveEvent` は基底へ渡さない。** 渡すと範囲選択の
-  ドラッグとして解釈される。ボタンを離したのは入れ子のループの中なので
+  落とすことになる。
+- **ドラッグ中の `mouseMoveEvent` は基底へ渡さない。** 開始した回も、入れ子の
+  ループから再入した回 (`m_dragging` が true) も、`accept()` して捨てる。渡すと
+  範囲選択のドラッグとして解釈される。ボタンを離したのは入れ子のループの中なので
   `mouseReleaseEvent` も届かない前提で状態を落とす。
 - **複数行のドラッグは作らない。** 選択は `SingleSelection` のままで、行の
   action と対象範囲を食い違わせない (Phase 4 の不変条件と同じ理由)。
