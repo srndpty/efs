@@ -200,7 +200,7 @@ pwsh scripts/package.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 4 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 4 完了 + Phase 6a (D&D) 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
@@ -210,7 +210,7 @@ pwsh scripts/package.ps1
 | 3 | 設定永続化、テーマ切替、エラー表示、Regex 構文警告、結果アイコン、`windeployqt` 配布 (完了) |
 | 4 | トレイ常駐、グローバルホットキー、多重起動防止、配置スクリプト (完了) |
 | 5 | 将来 backend の受け皿 (着手条件を満たしていない) |
-| 6 | 実利用で不満が出たときだけ着手する候補の置き場 (未確定) |
+| 6 | 実利用で不満が出たときだけ着手する候補の置き場 (未確定)。**6a = 結果行のドラッグ (完了)** |
 
 Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が実在するか」であり、
 当初の並びではない。Phase 6 に並んでいるのは **「やる」ではなく「不満として
@@ -425,3 +425,30 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   path を出して非ゼロで終わる。
 - **compile hygiene は `efs_enable_warnings()` の 1 箇所。** 本体・generator・
   tests のすべてに適用する。ツール類だけ警告が緩い状態を作らない。
+
+### Phase 6a (D&D) で追加した不変条件
+
+- **ドラッグには Qt の `QDrag` / `QMimeData` を使わない。** シェル自身の
+  データオブジェクト (PIDL → `IShellItemArray` →
+  `BindToHandler(BHID_DataObject)`) を `SHDoDragDrop` へ渡す。受け側から見て
+  Explorer からのドロップと区別が付かないことが要件なので、`text/uri-list` や
+  CF_HDROP を自前で載せる実装へ戻さない (`CFSTR_SHELLIDLIST` を見る受け側で
+  挙動が変わる)。Win32 は `app/ShellDrag.cpp` に閉じ込める。
+- **ドロップ効果は Copy / Move / Link の 3 つを許可するだけ。** 既定をこちらで
+  決め打たない。無印 = 移動 / Ctrl = コピー / Alt = ショートカット も、同一
+  ドライブなら移動・別ドライブならコピーも、受け側 (`IDropTarget`) がキー状態
+  から決める。片方を落とすと Explorer と挙動がずれる。
+- **移動でドロップされたときに自分でファイルを消しに行かない。** 元の削除は
+  シェルのデータオブジェクトの仕事。自前で消すと二重削除の事故になる
+  (消されなかった場合の実害はコピーになるだけ)。
+- **掴む対象は押した時点で `QString` として確保する。** `SHDoDragDrop` は
+  ドロップまで戻らず、その間も Qt のイベントが配送されるので、`QModelIndex` を
+  持ったままだと検索結果の到着でモデルが reset され、別の行 (あるいは消えた行) を
+  落とすことになる。同じ理由で入れ子のループからの再入を `m_dragging` で止める。
+- **ドラッグを始めた `mouseMoveEvent` は基底へ渡さない。** 渡すと範囲選択の
+  ドラッグとして解釈される。ボタンを離したのは入れ子のループの中なので
+  `mouseReleaseEvent` も届かない前提で状態を落とす。
+- **複数行のドラッグは作らない。** 選択は `SingleSelection` のままで、行の
+  action と対象範囲を食い違わせない (Phase 4 の不変条件と同じ理由)。
+  `startShellDrag()` が `QStringList` を取るのはシェル API がそもそも配列を
+  取るためであり、複数選択を先取りしたものではない。

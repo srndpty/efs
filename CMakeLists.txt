@@ -146,6 +146,10 @@ qt_add_executable(efs WIN32
     src/app/ShellIcon.cpp
     src/app/IconDelegate.h
     src/app/IconDelegate.cpp
+    src/app/ResultTableView.h
+    src/app/ResultTableView.cpp
+    src/app/ShellDrag.h
+    src/app/ShellDrag.cpp
     src/app/GlobalHotkey.h
     src/app/GlobalHotkey.cpp
     src/app/SingleInstance.h
@@ -153,9 +157,9 @@ qt_add_executable(efs WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/efs.rc"
 )
 # dwmapi: タイトルバーの明暗 (Theme.cpp)。
-# shell32 / ole32: Explorer で選択 (FileActions.cpp) と種別アイコンの
-# SHGetFileInfoW (ShellIcon.cpp)。いずれも Windows 固有処理を閉じ込めた
-# ファイルだけが使う。
+# shell32 / ole32: Explorer で選択 (FileActions.cpp)、種別アイコンの
+# SHGetFileInfoW (ShellIcon.cpp)、結果行のドラッグ (ShellDrag.cpp)。
+# いずれも Windows 固有処理を閉じ込めたファイルだけが使う。
 target_link_libraries(efs PRIVATE efs_core Qt6::Widgets dwmapi shell32 ole32)
 efs_copy_everything_dll(efs)
 efs_enable_warnings(efs)
