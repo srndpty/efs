@@ -1,13 +1,14 @@
 #include "app/ShellDrag.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QWidget>
 
 #include <string>
-#include <vector>
 
 #include <windows.h>
 
+#include <objbase.h>
 #include <shlobj.h>
 #include <wrl/client.h>
 
@@ -17,88 +18,134 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-// ILCreateFromPathW で作った PIDL の束。途中で失敗しても確実に解放する。
-class PidlList {
+// 失敗を無音にしない。popup は出さず、後から追える情報だけ残す。
+void warnFailure(const char* stage, const QString& fullPath, HRESULT hr)
+{
+    qWarning("ドラッグを開始できない (%s, hr=0x%08lX): %s", stage, static_cast<unsigned long>(hr),
+             qUtf8Printable(fullPath));
+}
+
+// DoDragDrop は OLE の初期化を要求する。GUI スレッドは Qt の Windows プラグイン
+// が初期化しているはずだが、**その内部実装だけを前提にしない**。既に初期化済み
+// なら S_FALSE が返って参照数が増えるだけなので、ここで釣り合いを取ればよい。
+// RPC_E_CHANGED_MODE 等で失敗したときに CoUninitialize 相当を呼ぶと他所が張った
+// 初期化を剥がしてしまうので、成功したときだけ解放する (ShellIcon.cpp と同じ規則)。
+class OleScope {
 public:
-    PidlList() = default;
-    ~PidlList()
+    OleScope() : m_hr(::OleInitialize(nullptr)) {}
+    ~OleScope()
     {
-        for (PIDLIST_ABSOLUTE pidl : m_pidls)
-            ::ILFree(pidl);
+        if (SUCCEEDED(m_hr))
+            ::OleUninitialize();
     }
 
-    PidlList(const PidlList&) = delete;
-    PidlList& operator=(const PidlList&) = delete;
-    PidlList(PidlList&&) = delete;
-    PidlList& operator=(PidlList&&) = delete;
+    OleScope(const OleScope&) = delete;
+    OleScope& operator=(const OleScope&) = delete;
+    OleScope(OleScope&&) = delete;
+    OleScope& operator=(OleScope&&) = delete;
 
-    bool add(const QString& fullPath)
-    {
-        const std::wstring native = QDir::toNativeSeparators(fullPath).toStdWString();
-        PIDLIST_ABSOLUTE pidl = ::ILCreateFromPathW(native.c_str());
-        if (!pidl)
-            return false;
-        m_pidls.push_back(pidl);
-        return true;
-    }
-
-    [[nodiscard]] UINT size() const { return static_cast<UINT>(m_pidls.size()); }
-
-    // SHCreateShellItemArrayFromIDLists は要素が const の配列を取る。
-    // 内側の const が増えるだけの変換なので const_cast で足りる。
-    [[nodiscard]] PCIDLIST_ABSOLUTE* data()
-    {
-        return const_cast<PCIDLIST_ABSOLUTE*>(m_pidls.data());
-    }
+    [[nodiscard]] HRESULT hr() const { return m_hr; }
 
 private:
-    std::vector<PIDLIST_ABSOLUTE> m_pidls;
+    HRESULT m_hr;
+};
+
+// SHParseDisplayName で作った絶対 PIDL。
+// **ILCreateFromPathW は使わない** — 契約が MAX_PATH までであり、Everything は
+// それを超えるパスを結果に返しうる。SHParseDisplayName には長さの制限が無く、
+// 321 文字のパスで PIDL / IDataObject (CFSTR_SHELLIDLIST + CF_HDROP) まで
+// 取れることを実測した。
+//
+// **`\\?\` 前置のパスを渡さない。** その形は
+// SHParseDisplayName に E_INVALIDARG で弾かれる (これも実測)。渡すのは
+// Everything が返す素のパスのままでよい。
+class AbsolutePidl {
+public:
+    AbsolutePidl() = default;
+    ~AbsolutePidl()
+    {
+        if (m_pidl != nullptr)
+            ::ILFree(m_pidl);
+    }
+
+    AbsolutePidl(const AbsolutePidl&) = delete;
+    AbsolutePidl& operator=(const AbsolutePidl&) = delete;
+    AbsolutePidl(AbsolutePidl&&) = delete;
+    AbsolutePidl& operator=(AbsolutePidl&&) = delete;
+
+    HRESULT parse(const QString& fullPath)
+    {
+        const std::wstring native = QDir::toNativeSeparators(fullPath).toStdWString();
+        return ::SHParseDisplayName(native.c_str(), nullptr, &m_pidl, 0, nullptr);
+    }
+
+    [[nodiscard]] PCIDLIST_ABSOLUTE get() const { return m_pidl; }
+
+private:
+    PIDLIST_ABSOLUTE m_pidl = nullptr;
 };
 
 } // namespace
 
-bool startShellDrag(QWidget* source, const QStringList& fullPaths)
+bool startShellDrag(QWidget* source, const QString& fullPath)
 {
-    if (source == nullptr || fullPaths.isEmpty())
+    if (source == nullptr || fullPath.isEmpty())
         return false;
 
-    PidlList pidls;
-    for (const QString& path : fullPaths) {
-        // **一部だけ載せない。** 受け側は落ちてきた集合をそのまま扱うので、
-        // 黙って間引くと「掴んだものと違うものが移動する」ことになる。
-        if (path.isEmpty() || !pidls.add(path))
-            return false;
+    const OleScope ole;
+    if (FAILED(ole.hr())) {
+        warnFailure("OleInitialize", fullPath, ole.hr());
+        return false;
     }
 
-    ComPtr<IShellItemArray> items;
-    if (FAILED(::SHCreateShellItemArrayFromIDLists(pidls.size(), pidls.data(), &items)))
+    AbsolutePidl pidl;
+    HRESULT hr = pidl.parse(fullPath);
+    if (FAILED(hr)) {
+        warnFailure("SHParseDisplayName", fullPath, hr);
         return false;
+    }
 
-    // シェル自身のデータオブジェクト。CF_HDROP も CFSTR_SHELLIDLIST も
-    // ドラッグ画像も、Explorer がドラッグ元のときと同じものが載る。
-    // 移動でドロップされたときに元を消すのもこのオブジェクトの仕事なので、
-    // **こちらでファイルを消しに行かない** (消し漏れてもコピーになるだけで、
-    // 二重に消す事故は起こさない)。
-    ComPtr<IDataObject> data;
-    if (FAILED(items->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&data))))
+    // 親フォルダの IShellFolder と、その中での子 PIDL を得る。
+    // ppidlLast は絶対 PIDL の内部を指すので解放しない (pidl の寿命に従う)。
+    ComPtr<IShellFolder> parent;
+    PCUITEMID_CHILD child = nullptr;
+    hr = ::SHBindToParent(pidl.get(), IID_PPV_ARGS(&parent), &child);
+    if (FAILED(hr)) {
+        warnFailure("SHBindToParent", fullPath, hr);
         return false;
+    }
 
-    // DoDragDrop はスレッドが OleInitialize 済みであることを要求する。GUI
-    // スレッドは Qt の Windows プラグインが起動時に初期化しているので、ここで
-    // 初期化し直さない (FileActions.cpp の ComScope は CoInitializeEx が要る
-    // SHOpenFolderAndSelectItems 用であり、こちらとは別の話)。
+    // **Explorer が item のデータオブジェクトを取るのと同じ経路。**
+    // CF_HDROP も CFSTR_SHELLIDLIST もドラッグ画像も、Explorer がドラッグ元の
+    // ときと同じものが載る。移動でドロップされたときに元を消すのもこの
+    // オブジェクトの仕事なので、**こちらでファイルを消しに行かない**
+    // (消し漏れてもコピーになるだけで、二重に消す事故は起こさない)。
     //
-    // 3 つとも許可する。無印 = 移動 / Ctrl = コピー / Alt = ショートカット の
-    // 対応と、同一ドライブなら移動・別ドライブならコピーという既定の選択は、
-    // 受け側 (ドロップ先の IDropTarget) がキー状態から決める。ここで既定を
-    // 決め打つと Explorer と挙動がずれる。
     // winId() は WId (quintptr) なので、HWND へ戻すには整数からポインタへの
     // キャストしか無い (Theme.cpp と同じ Qt / Win32 の境界)。
     // NOLINTNEXTLINE(performance-no-int-to-ptr)
     auto* const hwnd = reinterpret_cast<HWND>(source->window()->winId());
+    ComPtr<IDataObject> data;
+    hr = parent->GetUIObjectOf(hwnd, 1, &child, IID_IDataObject, nullptr,
+                               reinterpret_cast<void**>(data.GetAddressOf()));
+    if (FAILED(hr) || !data) {
+        warnFailure("GetUIObjectOf", fullPath, hr);
+        return false;
+    }
+
+    // 3 つとも許可する。無印 = 移動 / Ctrl = コピー / Alt = ショートカット の
+    // 対応と、同一ドライブなら移動・別ドライブならコピーという既定の選択は、
+    // 受け側 (ドロップ先の IDropTarget) がキー状態から決める。ここで既定を
+    // 決め打つと Explorer と挙動がずれる。
     DWORD effect = DROPEFFECT_NONE;
-    const HRESULT hr = ::SHDoDragDrop(hwnd, data.Get(), nullptr,
-                                      DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    hr = ::SHDoDragDrop(hwnd, data.Get(), nullptr,
+                        DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    // Escape / 右ボタンでのキャンセルは DRAGDROP_S_CANCEL。失敗ではないので
+    // 警告は出さない (受け側がドロップを受け付けなかった場合も同じ扱い)。
+    if (FAILED(hr)) {
+        warnFailure("SHDoDragDrop", fullPath, hr);
+        return false;
+    }
     return hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE;
 }
 

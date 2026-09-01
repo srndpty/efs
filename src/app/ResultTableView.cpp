@@ -43,7 +43,7 @@ void ResultTableView::mouseMoveEvent(QMouseEvent* event)
     const QString path = m_pressPath;
     m_pressPath.clear();
     m_dragging = true;
-    static_cast<void>(startShellDrag(this, {path}));
+    static_cast<void>(startShellDrag(this, path));
     m_dragging = false;
     // ボタンを離したのは入れ子のループの中なので release は届かない。
     // 基底へは渡さず (渡すと範囲選択のドラッグとして解釈される) ここで終える。

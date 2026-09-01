@@ -429,11 +429,32 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
 ### Phase 6a (D&D) で追加した不変条件
 
 - **ドラッグには Qt の `QDrag` / `QMimeData` を使わない。** シェル自身の
-  データオブジェクト (PIDL → `IShellItemArray` →
-  `BindToHandler(BHID_DataObject)`) を `SHDoDragDrop` へ渡す。受け側から見て
-  Explorer からのドロップと区別が付かないことが要件なので、`text/uri-list` や
-  CF_HDROP を自前で載せる実装へ戻さない (`CFSTR_SHELLIDLIST` を見る受け側で
-  挙動が変わる)。Win32 は `app/ShellDrag.cpp` に閉じ込める。
+  データオブジェクトを `SHDoDragDrop` へ渡す。受け側から見て Explorer からの
+  ドロップと区別が付かないことが要件なので、`text/uri-list` や CF_HDROP を
+  自前で載せる実装へ戻さない (`CFSTR_SHELLIDLIST` を見る受け側で挙動が変わる)。
+  Win32 は `app/ShellDrag.cpp` に閉じ込める。
+- **データオブジェクトは親フォルダの `GetUIObjectOf` から取る。**
+  `SHParseDisplayName` → `SHBindToParent` → `IShellFolder::GetUIObjectOf(hwnd, 1,
+  &child, IID_IDataObject, …)` が Explorer 自身の経路。
+  `SHCreateShellItemArrayFromIDLists` + `BindToHandler(BHID_DataObject)` へ
+  戻さない — `BHID_DataObject` は docs 上おもに
+  `SHCreateShellItemArrayFromDataObject` 由来の array に対して定義されており、
+  こちらの作り方の array での成立を authority にできない。
+  `SHBindToParent` が返す child PIDL は絶対 PIDL の内部を指すので**解放しない**。
+- **`ILCreateFromPathW` を使わない。** 契約が MAX_PATH までで、Everything は
+  それを超えるパスを返しうる。`SHParseDisplayName` には長さ制限が無く、321 文字の
+  パスで `IDataObject` (`CFSTR_SHELLIDLIST` + CF_HDROP) まで取れることを実測した。
+  逆に **`\\?\` を前置したパスは E_INVALIDARG で弾かれる**ので、
+  Everything が返す素のパスをそのまま渡すこと。
+- **OLE の初期化を Qt の内部実装に頼らない。** `SHDoDragDrop` は
+  `OleInitialize` 済みのスレッドを要求する。`ShellDrag.cpp` 自身が RAII で
+  `OleInitialize`/`OleUninitialize` を釣り合わせ、失敗したらドラッグを始めない。
+  S_FALSE (既に初期化済み) は成功なので必ず解放する。逆に失敗したときに解放
+  すると他所が張った初期化を剥がす (ShellIcon.cpp と同じ規則)。
+- **シェル API の失敗を無音にしない。** popup は出さないが、stage / path /
+  HRESULT を `qWarning` に残す。戻り値は `bool` のままでよい (呼び出し側に
+  できることが無いため)。ただし `DRAGDROP_S_CANCEL` は失敗ではないので警告
+  しない (Escape / 受け側が受け付けなかった場合)。
 - **ドロップ効果は Copy / Move / Link の 3 つを許可するだけ。** 既定をこちらで
   決め打たない。無印 = 移動 / Ctrl = コピー / Alt = ショートカット も、同一
   ドライブなら移動・別ドライブならコピーも、受け側 (`IDropTarget`) がキー状態
@@ -450,5 +471,6 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   `mouseReleaseEvent` も届かない前提で状態を落とす。
 - **複数行のドラッグは作らない。** 選択は `SingleSelection` のままで、行の
   action と対象範囲を食い違わせない (Phase 4 の不変条件と同じ理由)。
-  `startShellDrag()` が `QStringList` を取るのはシェル API がそもそも配列を
-  取るためであり、複数選択を先取りしたものではない。
+  `startShellDrag()` は `QString` を 1 本だけ取る。**使われない複数選択の
+  一般化を先に作らない** — シェル API 側は元から配列を取るので、実際に必要に
+  なった時点で広げれば足りる。

@@ -718,13 +718,14 @@ Alt = ショートカット) も、フォルダを VS Code に落とすと開く
 
 構成:
 
-- `app/ShellDrag.*` — パス → PIDL → `IShellItemArray` →
-  `BindToHandler(BHID_DataObject)` → `SHDoDragDrop`。Win32 はここに閉じ込める。
+- `app/ShellDrag.*` — パス → `SHParseDisplayName` → `SHBindToParent` →
+  親フォルダの `GetUIObjectOf(IID_IDataObject)` → `SHDoDragDrop`。Explorer 自身が
+  item のデータオブジェクトを取るのと同じ経路。Win32 はここに閉じ込める。
 - `app/ResultTableView.*` — `QTableView` の subclass。押した位置から
   `startDragDistance()` 動いた時点でドラッグを始めるだけ。
 
 スコープ外 (やらない): ドロップの受け側 (efs へ落とす)、複数行のドラッグ
-(選択は `SingleSelection` のまま)、ドラッグ画像の自作。
+(選択は `SingleSelection` のままで、API も `QString` 1 本)、ドラッグ画像の自作。
 
 恒久的にやらないもの (候補にも入れない): インストーラ / コード署名 / 自動更新 /
 i18n 機構 / DI フレームワーク / プラグイン機構。
