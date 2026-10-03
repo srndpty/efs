@@ -6,6 +6,7 @@
 #include "app/IconDelegate.h"
 #include "app/RegexValidation.h"
 #include "app/ResultTableModel.h"
+#include "app/ResultTableView.h"
 #include "app/SearchController.h"
 #include "app/ShellIcon.h"
 #include "app/Theme.h"
@@ -398,7 +399,9 @@ void MainWindow::refreshToolbarIcons()
 
 void MainWindow::buildTable()
 {
-    m_tableView = new QTableView(this);
+    // ドラッグで他アプリへ渡せるようにするためだけの subclass。
+    // 掴んだ行は Explorer から掴んだのと同じデータオブジェクトとして飛ぶ。
+    m_tableView = new ResultTableView(this);
     m_tableView->setModel(m_model);
     m_tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     // **SingleSelection。** Open / Show in Explorer / Copy Full Path / Copy Name は

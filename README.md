@@ -34,6 +34,27 @@ python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O C:\Qt
 
 ## ビルドと実行
 
+推奨入口はリポジトリ直下の `dev.ps1`。既存の手順を呼ぶ薄いラッパーで、
+任意の作業ディレクトリからスクリプトのパスを指定して使える。
+グローバルな `dev` が repo-local スクリプトへ転送する環境では `dev build` 等も使える。
+グローバルコマンドの導入や shell profile の変更は行わない。
+
+```powershell
+.\dev.ps1 help
+.\dev.ps1 build      # 通常の Debug ビルド
+.\dev.ps1 gui        # ビルドして GUI 起動。run も同じ（終了まで待機）
+.\dev.ps1 test       # ビルド済み Debug のテスト
+.\dev.ps1 lint       # Developer PowerShell で Ninja ビルド + clang-tidy
+.\dev.ps1 check      # AGENTS.md のコミット前検証: pre-commit 全件 + ビルド + テスト
+.\dev.ps1 package    # Release 配布物を作る
+.\dev.ps1 install    # 配布物を作って既存版を更新。更新後の起動は手動
+.\dev.ps1 clean      # Debug の CMake clean。設定・配布物・Release は削除しない
+```
+
+`check` は CI 全ジョブの再現ではなく、既存のコミット前手順の入口。
+lint の初回準備 (`pwsh scripts/lint.ps1 -Bootstrap`) や個別オプションは、
+引き続き既存スクリプトを直接使う。以下の詳細手順も利用できる。
+
 ```powershell
 cmake --preset msvc2022-x64
 cmake --build --preset msvc2022-x64-debug      # または msvc2022-x64-release

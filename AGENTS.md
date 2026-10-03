@@ -81,6 +81,22 @@ third_party/              ベンダリングした Everything SDK。整形・lin
 
 ## 開発コマンド
 
+推奨入口は repo-local の `dev.ps1` (転送用のグローバル `dev` がある環境では
+`dev <command>` でも同じ)。任意の作業ディレクトリからスクリプトのパスを指定できる。
+
+```powershell
+.\dev.ps1 build    # 通常の Debug ビルド
+.\dev.ps1 gui      # ビルドして GUI 起動。run も同じ（終了まで待機）
+.\dev.ps1 test     # ビルド済み Debug のテスト
+.\dev.ps1 lint     # 下記の Ninja 構成・ビルド + lint。Developer PowerShell が必要
+.\dev.ps1 check    # コミット前の正式手順: pre-commit 全件 → Debug ビルド → テスト
+.\dev.ps1 install  # package.ps1 → install.ps1。更新後の起動は手動
+.\dev.ps1 help
+```
+
+`check` に CI 専用の lint / coverage / package は追加しない。
+個別オプションや初回準備には以下の詳細手順を使う。
+
 ```powershell
 # 初回のみ
 pre-commit install
@@ -200,7 +216,7 @@ pwsh scripts/package.ps1
 ## フェーズ
 
 計画の authority は [docs/implementation-plan.md](./docs/implementation-plan.md)。
-現在 **Phase 4 完了**。各フェーズの範囲外に手を出さない。
+現在 **Phase 4 完了 + Phase 6a (D&D) 完了**。各フェーズの範囲外に手を出さない。
 
 | Phase | 内容 |
 |---|---|
@@ -210,7 +226,7 @@ pwsh scripts/package.ps1
 | 3 | 設定永続化、テーマ切替、エラー表示、Regex 構文警告、結果アイコン、`windeployqt` 配布 (完了) |
 | 4 | トレイ常駐、グローバルホットキー、多重起動防止、配置スクリプト (完了) |
 | 5 | 将来 backend の受け皿 (着手条件を満たしていない) |
-| 6 | 実利用で不満が出たときだけ着手する候補の置き場 (未確定) |
+| 6 | 実利用で不満が出たときだけ着手する候補の置き場 (未確定)。**6a = 結果行のドラッグ (完了)** |
 
 Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が実在するか」であり、
 当初の並びではない。Phase 6 に並んでいるのは **「やる」ではなく「不満として
@@ -425,3 +441,57 @@ Phase 4 と 5 は当初と逆順にした。順番の authority は「不満が�
   path を出して非ゼロで終わる。
 - **compile hygiene は `efs_enable_warnings()` の 1 箇所。** 本体・generator・
   tests のすべてに適用する。ツール類だけ警告が緩い状態を作らない。
+
+### Phase 6a (D&D) で追加した不変条件
+
+- **ドラッグには Qt の `QDrag` / `QMimeData` を使わない。** シェル自身の
+  データオブジェクトを `SHDoDragDrop` へ渡す。受け側から見て Explorer からの
+  ドロップと区別が付かないことが要件なので、`text/uri-list` や CF_HDROP を
+  自前で載せる実装へ戻さない (`CFSTR_SHELLIDLIST` を見る受け側で挙動が変わる)。
+  実測で確認したのは `CFSTR_SHELLIDLIST` と CF_HDROP が載ることまで。ドラッグ
+  画像は自前で用意せず `SHDoDragDrop` とシェルの既定処理に任せる。
+  Win32 は `app/ShellDrag.cpp` に閉じ込める。
+- **データオブジェクトは親フォルダの `GetUIObjectOf` から取る。**
+  `SHParseDisplayName` → `SHBindToParent` → `IShellFolder::GetUIObjectOf(hwnd, 1,
+  &child, IID_IDataObject, …)` が Explorer 自身の経路。
+  `SHCreateShellItemArrayFromIDLists` + `BindToHandler(BHID_DataObject)` へ
+  戻さない — `BHID_DataObject` は docs 上おもに
+  `SHCreateShellItemArrayFromDataObject` 由来の array に対して定義されており、
+  こちらの作り方の array での成立を authority にできない。
+  `SHBindToParent` が返す child PIDL は絶対 PIDL の内部を指すので**解放しない**。
+- **`ILCreateFromPathW` を使わない。** docs 上 MAX_PATH までしか契約されておらず、
+  Everything はそれを超えるパスを返しうる。`SHParseDisplayName` にはその制約が
+  無く、321 文字の実在パスで PIDL / `IDataObject` の取得まで実測で通った
+  (**「長さ無制限」を保証したわけではない**)。逆に
+  **`\\?\` を前置したパスは E_INVALIDARG で弾かれる**ので、
+  Everything が返す素のパスをそのまま渡すこと。PIDL の解放は `CoTaskMemFree`
+  (Windows 2000 以降の推奨。`ILFree` は等価な旧 API)。
+- **OLE の初期化を Qt の内部実装に頼らない。** `SHDoDragDrop` は
+  `OleInitialize` 済みのスレッドを要求する。`ShellDrag.cpp` 自身が RAII で
+  `OleInitialize`/`OleUninitialize` を釣り合わせ、失敗したらドラッグを始めない。
+  S_FALSE (既に初期化済み) は成功なので必ず解放する。逆に失敗したときに解放
+  すると他所が張った初期化を剥がす (ShellIcon.cpp と同じ規則)。
+- **シェル API の失敗を無音にしない。** popup は出さないが、stage / path /
+  HRESULT を `qWarning` に残す。戻り値は `bool` のままでよい (呼び出し側に
+  できることが無いため)。ただし `DRAGDROP_S_CANCEL` は失敗ではないので警告
+  しない (Escape / 受け側が受け付けなかった場合)。
+- **ドロップ効果は Copy / Move / Link の 3 つを許可するだけ。** 既定をこちらで
+  決め打たない。無印 = 移動 / Ctrl = コピー / Alt = ショートカット も、同一
+  ドライブなら移動・別ドライブならコピーも、受け側 (`IDropTarget`) がキー状態
+  から決める。片方を落とすと Explorer と挙動がずれる。
+- **移動でドロップされたときに自分でファイルを消しに行かない。** 元の削除は
+  シェルのデータオブジェクトの仕事。自前で消すと二重削除の事故になる
+  (消されなかった場合の実害はコピーになるだけ)。
+- **掴む対象は押した時点で `QString` として確保する。** `SHDoDragDrop` は
+  ドロップまで戻らず、その間も Qt のイベントが配送されるので、`QModelIndex` を
+  持ったままだと検索結果の到着でモデルが reset され、別の行 (あるいは消えた行) を
+  落とすことになる。
+- **ドラッグ中の `mouseMoveEvent` は基底へ渡さない。** 開始した回も、入れ子の
+  ループから再入した回 (`m_dragging` が true) も、`accept()` して捨てる。渡すと
+  範囲選択のドラッグとして解釈される。ボタンを離したのは入れ子のループの中なので
+  `mouseReleaseEvent` も届かない前提で状態を落とす。
+- **複数行のドラッグは作らない。** 選択は `SingleSelection` のままで、行の
+  action と対象範囲を食い違わせない (Phase 4 の不変条件と同じ理由)。
+  `startShellDrag()` は `QString` を 1 本だけ取る。**使われない複数選択の
+  一般化を先に作らない** — シェル API 側は元から配列を取るので、実際に必要に
+  なった時点で広げれば足りる。
