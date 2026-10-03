@@ -81,6 +81,22 @@ third_party/              ベンダリングした Everything SDK。整形・lin
 
 ## 開発コマンド
 
+推奨入口は repo-local の `dev.ps1` (転送用のグローバル `dev` がある環境では
+`dev <command>` でも同じ)。任意の作業ディレクトリからスクリプトのパスを指定できる。
+
+```powershell
+.\dev.ps1 build    # 通常の Debug ビルド
+.\dev.ps1 gui      # ビルドして GUI 起動。run も同じ（終了まで待機）
+.\dev.ps1 test     # ビルド済み Debug のテスト
+.\dev.ps1 lint     # 下記の Ninja 構成・ビルド + lint。Developer PowerShell が必要
+.\dev.ps1 check    # コミット前の正式手順: pre-commit 全件 → Debug ビルド → テスト
+.\dev.ps1 install  # package.ps1 → install.ps1。更新後の起動は手動
+.\dev.ps1 help
+```
+
+`check` に CI 専用の lint / coverage / package は追加しない。
+個別オプションや初回準備には以下の詳細手順を使う。
+
 ```powershell
 # 初回のみ
 pre-commit install
