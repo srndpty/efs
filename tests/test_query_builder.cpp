@@ -28,6 +28,7 @@ private slots:
     void regexWhitespaceContractMatchesHasSearchConstraint();
     void extensionListsAreDistinctAndLowerCase_data();
     void extensionListsAreDistinctAndLowerCase();
+    void isExtensionForMatchesOnlyTheKindsList();
 };
 
 void TestQueryBuilder::buildsExpectedQuery_data()
@@ -354,6 +355,19 @@ void TestQueryBuilder::extensionListsAreDistinctAndLowerCase()
     }
     // 重複があっても動くが、クエリが無駄に長くなるので気づけるようにする。
     QCOMPARE(QSet<QString>(extensions.begin(), extensions.end()).size(), extensions.size());
+}
+
+// SearchQuery::extension の不変条件の判定。Settings と SearchController が共用する。
+void TestQueryBuilder::isExtensionForMatchesOnlyTheKindsList()
+{
+    QVERIFY(efs::isExtensionFor(FileKind::Image, QStringLiteral("png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Video, QStringLiteral("png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::All, QStringLiteral("png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Directory, QStringLiteral("png")));
+    // 正規化済みの値 (小文字・ドット無し) だけを受け入れる。
+    QVERIFY(!efs::isExtensionFor(FileKind::Image, QStringLiteral(".png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Image, QStringLiteral("PNG")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Image, QString()));
 }
 
 QTEST_GUILESS_MAIN(TestQueryBuilder)

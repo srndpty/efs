@@ -122,6 +122,7 @@ private slots:
     void restoredFileKindIssuesAtMostOneQuery();
     void restoreDoesNotFanOutIntoMultipleQueries();
     void optionsRoundTripThroughController();
+    void restoredExtensionOutsideKindIsDropped();
 
     // --- P4 review: --tray の初回クエリ保留 ------------------------------------
     void deferredRestoreIssuesNoQueryUntilSearchNow();
@@ -868,6 +869,32 @@ void TestSearchController::optionsRoundTripThroughController()
     QCOMPARE(controller.regex(), options.regex);
     QCOMPARE(controller.sortKey(), options.sortKey);
     QCOMPARE(controller.sortOrder(), options.sortOrder);
+}
+
+// 復元値の extension が kind の拡張子でなければ controller が空へ落とす。
+// 残すと All + "png" のように、hasSearchConstraint() は「条件なし」と見るのに
+// buildQueryString() は ext:png を組み立てる不正状態になる。
+void TestSearchController::restoredExtensionOutsideKindIsDropped()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kNeverFiresMs = 600000;
+    efs::SearchController controller(std::move(backend), kNeverFiresMs);
+
+    controller.restoreOptions({.kind = efs::FileKind::All, .extension = QStringLiteral("png")});
+    QVERIFY(controller.extension().isEmpty());
+    QVERIFY(controller.options().extension.isEmpty());
+
+    controller.restoreOptions({.kind = efs::FileKind::Video, .extension = QStringLiteral("png")});
+    QTRY_COMPARE(fake->queries().size(), 1);
+    QCOMPARE(fake->queries().at(0).kind, efs::FileKind::Video);
+    QVERIFY(fake->queries().at(0).extension.isEmpty());
+
+    // kind の拡張子なら保持する。
+    controller.restoreOptions({.kind = efs::FileKind::Video, .extension = QStringLiteral("mp4")});
+    QCOMPARE(controller.extension(), QStringLiteral("mp4"));
 }
 
 // --- P4 review: `--tray` の隠れた起動では初回クエリを出さない ------------------

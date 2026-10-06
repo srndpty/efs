@@ -307,11 +307,8 @@ void MainWindow::buildToolBar()
     toolBar->setObjectName(QStringLiteral("filterToolBar"));
     toolBar->setMovable(false);
     toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    // ツールバーは常に表示する。QMainWindow 既定の右クリックメニュー (ツールバーの
-    // 表示/非表示の切替) は出さない。種別ボタンの右クリックは各ボタンで拡張子
-    // メニューに使う。
-    toolBar->toggleViewAction()->setVisible(false);
-    setContextMenuPolicy(Qt::NoContextMenu);
+    // ツールバーは常に表示する (隠す手段は createPopupMenu() で塞いである)。
+    // 種別ボタンの右クリックは各ボタンで拡張子メニューに使う。
     m_filterToolBar = toolBar;
 
     // 6 種別は排他。QActionGroup に任せ、自前で checked を管理しない。

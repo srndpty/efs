@@ -175,7 +175,6 @@ void TestSettings::sortOrderRoundTrip()
     QCOMPARE(efs::Settings::load().options.sortOrder, value);
 }
 
-// 手編集で壊れた / 将来消えた列挙子が残っている INI。既定値へ戻ること。
 void TestSettings::extensionRoundTrip()
 {
     efs::Settings saved;
@@ -215,6 +214,7 @@ void TestSettings::extensionOutsideKindFallsBackToAll()
     QVERIFY(loaded.options.extension.isEmpty());
 }
 
+// 手編集で壊れた / 将来消えた列挙子が残っている INI。既定値へ戻ること。
 void TestSettings::corruptedEnumsFallBackToDefaults()
 {
     {

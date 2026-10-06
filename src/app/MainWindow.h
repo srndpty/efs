@@ -65,6 +65,9 @@ protected:
     // **閉じるボタンでは終了しない** (常駐アプリ)。設定を保存して隠すだけ。
     // 終了するのは quitApplication() だけ (トレイの Quit と `--quit` IPC)。
     void closeEvent(QCloseEvent* event) override;
+    // ツールバーは常に表示する仕様なので、QMainWindow 既定の「ツールバーの
+    // 表示/非表示」メニューを出さない (nullptr を返す)。
+    QMenu* createPopupMenu() override { return nullptr; }
 
 private:
     void buildToolBar();

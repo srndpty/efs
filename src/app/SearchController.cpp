@@ -1,11 +1,24 @@
 #include "app/SearchController.h"
 
 #include "app/SearchWorker.h"
+#include "core/FileKinds.h"
 
 #include <QThread>
 #include <QTimer>
 
 namespace efs {
+
+namespace {
+
+// SearchQuery::extension の不変条件 (空 または kind の拡張子) をここで閉じる。
+// 範囲外の値を残すと、hasSearchConstraint() は All + 空テキストを「条件なし」と
+// 見る一方で buildQueryString() は ext: を組み立てる、という食い違いが起きる。
+QString canonicalExtension(FileKind kind, const QString& extension)
+{
+    return isExtensionFor(kind, extension) ? extension : QString();
+}
+
+} // namespace
 
 SearchController::SearchController(std::unique_ptr<ISearchBackend> backend, int debounceMs,
                                    QObject* parent)
@@ -73,10 +86,14 @@ void SearchController::setKind(FileKind kind)
 
 void SearchController::setFilter(FileKind kind, const QString& extension)
 {
-    if (kind == m_query.kind && extension == m_query.extension)
+    // UI は kind のメニューに並べた拡張子しか渡さない。それ以外はプログラムの誤り。
+    Q_ASSERT_X(extension.isEmpty() || isExtensionFor(kind, extension), "setFilter",
+               "extension が kind の拡張子リストに無い");
+    const QString canonical = canonicalExtension(kind, extension);
+    if (kind == m_query.kind && canonical == m_query.extension)
         return;
     m_query.kind = kind;
-    m_query.extension = extension;
+    m_query.extension = canonical;
     dispatch();
 }
 
@@ -102,7 +119,8 @@ void SearchController::restoreOptions(const SearchOptions& options, InitialDispa
     // 値を全部入れてから 1 回だけ dispatch する。個々の setter を呼ぶと
     // 復元だけで最大 3 本のクエリが飛ぶ。
     m_query.kind = options.kind;
-    m_query.extension = options.extension;
+    // 外部 (INI) 由来の値なので assert はせず、範囲外は種別の全拡張子へ落とす。
+    m_query.extension = canonicalExtension(options.kind, options.extension);
     m_query.regex = options.regex;
     m_query.sortKey = options.sortKey;
     m_query.sortOrder = options.sortOrder;

@@ -134,7 +134,7 @@ Settings Settings::load()
     // リストから外れた / 壊れた値は「種別の全拡張子」(空) に戻す。
     const QString extension =
         settings.value(QString::fromLatin1(kExtensionKey)).toString().trimmed().toLower();
-    if (extensionsFor(loaded.options.kind).contains(extension))
+    if (isExtensionFor(loaded.options.kind, extension))
         loaded.options.extension = extension;
     loaded.options.regex = readBool(settings, kRegexKey, defaults.options.regex);
     loaded.options.sortKey =
