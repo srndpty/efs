@@ -23,10 +23,12 @@ private slots:
     void p0RegressionExtPlusRegex();
     void p2RegressionRegexWithSpaceIsQuoted();
     void fileKindIsAHardConstraint();
+    void selectedExtensionNarrowsKind();
     void regexWhitespaceContractMatchesHasSearchConstraint_data();
     void regexWhitespaceContractMatchesHasSearchConstraint();
     void extensionListsAreDistinctAndLowerCase_data();
     void extensionListsAreDistinctAndLowerCase();
+    void isExtensionForMatchesOnlyTheKindsList();
 };
 
 void TestQueryBuilder::buildsExpectedQuery_data()
@@ -269,6 +271,24 @@ void TestQueryBuilder::fileKindIsAHardConstraint()
     QVERIFY(built.indexOf(u'|') < closeGroup);
 }
 
+// 拡張子メニューで 1 つ選んだときは、種別の全拡張子ではなくその 1 つだけの
+// ext: 項になる。ユーザー式のグルーピングと regex: の扱いは種別のときと同じ。
+void TestQueryBuilder::selectedExtensionNarrowsKind()
+{
+    SearchQuery query;
+    query.kind = FileKind::Image;
+    query.extension = QStringLiteral("png");
+
+    QCOMPARE(efs::buildQueryString(query), QStringLiteral("ext:png"));
+
+    query.text = QStringLiteral("alpha|beta");
+    QCOMPARE(efs::buildQueryString(query), QStringLiteral("ext:png <alpha|beta>"));
+
+    query.regex = true;
+    query.text = QStringLiteral("^IMG \\d+");
+    QCOMPARE(efs::buildQueryString(query), QStringLiteral("ext:png regex:\"^IMG \\d+\""));
+}
+
 // buildQueryString() と hasSearchConstraint() は空白について同じ契約でなければ
 // ならない。ずれると「検索条件はあると判定したのにクエリが空」あるいはその逆に
 // なる。両者を同じ入力で突き合わせて固定する。
@@ -335,6 +355,19 @@ void TestQueryBuilder::extensionListsAreDistinctAndLowerCase()
     }
     // 重複があっても動くが、クエリが無駄に長くなるので気づけるようにする。
     QCOMPARE(QSet<QString>(extensions.begin(), extensions.end()).size(), extensions.size());
+}
+
+// SearchQuery::extension の不変条件の判定。Settings と SearchController が共用する。
+void TestQueryBuilder::isExtensionForMatchesOnlyTheKindsList()
+{
+    QVERIFY(efs::isExtensionFor(FileKind::Image, QStringLiteral("png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Video, QStringLiteral("png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::All, QStringLiteral("png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Directory, QStringLiteral("png")));
+    // 正規化済みの値 (小文字・ドット無し) だけを受け入れる。
+    QVERIFY(!efs::isExtensionFor(FileKind::Image, QStringLiteral(".png")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Image, QStringLiteral("PNG")));
+    QVERIFY(!efs::isExtensionFor(FileKind::Image, QString()));
 }
 
 QTEST_GUILESS_MAIN(TestQueryBuilder)

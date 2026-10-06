@@ -34,4 +34,9 @@ QStringList extensionsFor(FileKind kind)
     return {};
 }
 
+bool isExtensionFor(FileKind kind, const QString& extension)
+{
+    return !extension.isEmpty() && extensionsFor(kind).contains(extension);
+}
+
 } // namespace efs

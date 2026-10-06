@@ -15,4 +15,8 @@ namespace efs {
 // Directory は拡張子ではなく folder: 項で表現するため。
 [[nodiscard]] QStringList extensionsFor(FileKind kind);
 
+// extension (小文字・ドット無し) が kind の拡張子リストに含まれるか。
+// SearchQuery::extension の不変条件の判定はここ 1 箇所に寄せる。空文字は false。
+[[nodiscard]] bool isExtensionFor(FileKind kind, const QString& extension);
+
 } // namespace efs

@@ -1,5 +1,7 @@
 #include "app/Settings.h"
 
+#include "core/FileKinds.h"
+
 #include <QSettings>
 #include <QString>
 
@@ -16,6 +18,7 @@ constexpr auto kGeometryKey = "window/geometry";
 constexpr auto kWindowStateKey = "window/state";
 constexpr auto kHeaderStateKey = "window/headerState";
 constexpr auto kKindKey = "search/kind";
+constexpr auto kExtensionKey = "search/extension";
 constexpr auto kRegexKey = "search/regex";
 constexpr auto kSortKeyKey = "search/sortKey";
 constexpr auto kSortOrderKey = "search/sortOrder";
@@ -127,6 +130,12 @@ Settings Settings::load()
     Settings loaded;
     loaded.theme = readEnum(settings, kThemeKey, kThemeNames, defaults.theme);
     loaded.options.kind = readEnum(settings, kKindKey, kKindNames, defaults.options.kind);
+    // 拡張子は種別のリストに含まれるものだけを受け入れる。種別が変わった /
+    // リストから外れた / 壊れた値は「種別の全拡張子」(空) に戻す。
+    const QString extension =
+        settings.value(QString::fromLatin1(kExtensionKey)).toString().trimmed().toLower();
+    if (isExtensionFor(loaded.options.kind, extension))
+        loaded.options.extension = extension;
     loaded.options.regex = readBool(settings, kRegexKey, defaults.options.regex);
     loaded.options.sortKey =
         readEnum(settings, kSortKeyKey, kSortKeyNames, defaults.options.sortKey);
@@ -158,6 +167,7 @@ bool Settings::save() const
     settings.setValue(QString::fromLatin1(kVersionKey), kSettingsVersion);
     settings.setValue(QString::fromLatin1(kThemeKey), nameOf(kThemeNames, theme));
     settings.setValue(QString::fromLatin1(kKindKey), nameOf(kKindNames, options.kind));
+    settings.setValue(QString::fromLatin1(kExtensionKey), options.extension);
     settings.setValue(QString::fromLatin1(kRegexKey), options.regex);
     settings.setValue(QString::fromLatin1(kSortKeyKey), nameOf(kSortKeyNames, options.sortKey));
     settings.setValue(QString::fromLatin1(kSortOrderKey),

@@ -14,7 +14,9 @@ QString buildQueryString(const SearchQuery& query)
     if (query.kind == FileKind::Directory) {
         terms << QStringLiteral("folder:");
     } else {
-        const QStringList extensions = extensionsFor(query.kind);
+        // 拡張子が選ばれていればその 1 つだけ。種別の全拡張子と同じ ext: 項で表す。
+        const QStringList extensions =
+            query.extension.isEmpty() ? extensionsFor(query.kind) : QStringList{query.extension};
         if (!extensions.isEmpty())
             terms << QStringLiteral("ext:") + extensions.join(u';');
     }

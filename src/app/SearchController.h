@@ -45,7 +45,12 @@ public:
     // いずれもユーザーが UI を 1 クリック/1 ショートカットで起こしたものなので
     // デバウンスせず即時に再検索する。同じ値の再設定では何も発行しない。
     // UI は SearchQuery を直接編集せず、必ずここを通す (検索状態の authority)。
+    // 種別ボタン本体のクリック。拡張子の絞り込みは解除する (= 種別の全拡張子)。
     void setKind(FileKind kind);
+    // 種別と拡張子を 1 回の操作で変える (拡張子メニューからの選択)。別の種別の
+    // ボタンから拡張子を選んだ場合も、kind と extension を別々に設定すると
+    // 2 本のクエリになるので必ずここを通す。extension は空 = 種別の全拡張子。
+    void setFilter(FileKind kind, const QString& extension);
     void setRegex(bool regex);
     void setSort(SortKey key, SortOrder order);
 
@@ -55,8 +60,8 @@ public:
 
     // 起動時に永続化されたオプションをまとめて戻す (Phase 3 / F9)。
     //
-    // setKind() / setRegex() / setSort() を順に呼ぶと 1 回の復元で最大 3 本の
-    // クエリが backend へ飛ぶ。ここは 4 つの値を先に全部入れてから 1 回だけ
+    // setFilter() / setRegex() / setSort() を順に呼ぶと 1 回の復元で最大 3 本の
+    // クエリが backend へ飛ぶ。ここは全部の値を先に入れてから 1 回だけ
     // dispatch する。結果として発行されるクエリは高々 1 本 (検索欄は起動時に
     // 空なので、復元された kind が All なら 0 本 = cleared)。
     //
@@ -75,6 +80,7 @@ public:
     [[nodiscard]] const SearchQuery& query() const { return m_query; }
 
     [[nodiscard]] FileKind kind() const { return m_query.kind; }
+    [[nodiscard]] const QString& extension() const { return m_query.extension; }
     [[nodiscard]] bool regex() const { return m_query.regex; }
     [[nodiscard]] SortKey sortKey() const { return m_query.sortKey; }
     [[nodiscard]] SortOrder sortOrder() const { return m_query.sortOrder; }
