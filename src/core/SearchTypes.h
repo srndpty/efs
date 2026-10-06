@@ -23,6 +23,9 @@ struct SearchQuery {
     quint64 id = 0; // 単調増加。stale 判定に使う
     QString text;   // ユーザー入力そのまま (Everything の検索構文をそのまま許す)
     FileKind kind = FileKind::All;
+    // 種別の中の 1 拡張子に絞る (小文字・ドット無し)。空 = 種別の全拡張子。
+    // 空でないなら extensionsFor(kind) に含まれる値であること (UI と Settings が保証)。
+    QString extension;
     bool regex = false;
     bool matchCase = false;
     bool matchPath = false; // false = ファイル名のみ照合
@@ -38,6 +41,7 @@ struct SearchQuery {
 // 含めない (検索文字列は永続化しない — search history と意味が混ざるため)。
 struct SearchOptions {
     FileKind kind = FileKind::All;
+    QString extension; // SearchQuery::extension と同じ契約
     bool regex = false;
     SortKey sortKey = SortKey::Name;
     SortOrder sortOrder = SortOrder::Asc;

@@ -11,6 +11,7 @@
 #include "app/ShellIcon.h"
 #include "app/Theme.h"
 #include "app/ToolbarIcons.h"
+#include "core/FileKinds.h"
 #include "core/Formatting.h"
 #include "core/MatchHighlight.h"
 
@@ -193,6 +194,9 @@ MainWindow::MainWindow(std::unique_ptr<ISearchBackend> backend, Settings setting
         resize(1000, 640);
     if (!m_settings.windowState.isEmpty())
         restoreState(m_settings.windowState);
+    // ツールバーは常に表示する (隠す手段は塞いである)。以前の版で隠したまま
+    // 保存された windowState を復元しても、ここで戻す。
+    m_filterToolBar->show();
 
     setTheme(m_settings.theme);
 
@@ -303,6 +307,12 @@ void MainWindow::buildToolBar()
     toolBar->setObjectName(QStringLiteral("filterToolBar"));
     toolBar->setMovable(false);
     toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    // ツールバーは常に表示する。QMainWindow 既定の右クリックメニュー (ツールバーの
+    // 表示/非表示の切替) は出さない。種別ボタンの右クリックは各ボタンで拡張子
+    // メニューに使う。
+    toolBar->toggleViewAction()->setVisible(false);
+    setContextMenuPolicy(Qt::NoContextMenu);
+    m_filterToolBar = toolBar;
 
     // 6 種別は排他。QActionGroup に任せ、自前で checked を管理しない。
     auto* group = new QActionGroup(this);
@@ -321,14 +331,50 @@ void MainWindow::buildToolBar()
         action->setToolTip(
             QStringLiteral("%1 (%2)").arg(QString::fromLatin1(entry.label),
                                           action->shortcut().toString(QKeySequence::NativeText)));
-        // 復元済みの controller の状態に合わせる (controller が authority)。
-        action->setChecked(entry.kind == m_controller->kind());
         group->addAction(action);
 
+        // ボタン本体 (左側) は種別の全拡張子に戻す。
         const FileKind kind = entry.kind;
-        connect(action, &QAction::triggered, this, [this, kind] { m_controller->setKind(kind); });
+        connect(action, &QAction::triggered, this, [this, kind] {
+            m_controller->setKind(kind);
+            syncFilterActions();
+        });
+
+        // 拡張子を持つ種別は split ボタンにし、右端の矢印と右クリックで
+        // 「All / .png / .jpg …」から 1 拡張子を選べるようにする。
+        const QStringList extensions = extensionsFor(kind);
+        if (!extensions.isEmpty()) {
+            auto* menu = new QMenu(this);
+            auto* extensionGroup = new QActionGroup(menu);
+            // 選択中でない種別のメニューは全項目を外すので、「1 つも無し」を許す。
+            extensionGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+            const auto addExtension = [&](const QString& text, const QString& extension) {
+                auto* item = menu->addAction(text);
+                item->setCheckable(true);
+                item->setData(extension);
+                extensionGroup->addAction(item);
+                connect(item, &QAction::triggered, this, [this, kind, extension] {
+                    m_controller->setFilter(kind, extension);
+                    syncFilterActions();
+                });
+            };
+            addExtension(QStringLiteral("All"), QString());
+            menu->addSeparator();
+            for (const QString& extension : extensions)
+                addExtension(u'.' + extension, extension);
+            m_kindMenus.at(static_cast<std::size_t>(shortcutIndex)) = menu;
+
+            auto* button = qobject_cast<QToolButton*>(toolBar->widgetForAction(action));
+            button->setMenu(menu);
+            button->setPopupMode(QToolButton::MenuButtonPopup);
+            button->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(button, &QToolButton::customContextMenuRequested, button,
+                    &QToolButton::showMenu);
+        }
         ++shortcutIndex;
     }
+    // 復元済みの controller の状態に合わせる (controller が authority)。
+    syncFilterActions();
 
     toolBar->addSeparator();
 
@@ -349,6 +395,30 @@ void MainWindow::buildToolBar()
     addAction(m_regexAction);
 
     buildThemeMenu(toolBar);
+}
+
+void MainWindow::syncFilterActions()
+{
+    const FileKind current = m_controller->kind();
+    const QString& extension = m_controller->extension();
+
+    for (std::size_t i = 0; i < kKinds.size(); ++i) {
+        const bool active = kKinds.at(i).kind == current;
+        QAction* action = m_kindActions.at(i);
+        action->setChecked(active);
+        // 拡張子で絞っていることがボタンだけで分かるようにする。
+        const QString label = QString::fromLatin1(kKinds.at(i).label);
+        action->setText(active && !extension.isEmpty()
+                            ? QStringLiteral("%1 (.%2)").arg(label, extension)
+                            : label);
+
+        if (QMenu* menu = m_kindMenus.at(i)) {
+            for (QAction* item : menu->actions()) {
+                if (item->isCheckable())
+                    item->setChecked(active && item->data().toString() == extension);
+            }
+        }
+    }
 }
 
 void MainWindow::buildThemeMenu(QToolBar* toolBar)

@@ -18,6 +18,7 @@ class QAction;
 class QCloseEvent;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QModelIndex;
 class QPoint;
 class QSystemTrayIcon;
@@ -89,6 +90,9 @@ private:
     // ツールバーのアイコンは QPainter で描いた固定色のピクスマップなので、
     // テーマを変えたら描き直す必要がある (Light の地に薄い線を描くと消える)。
     void refreshToolbarIcons();
+    // 種別ボタンの checked / 表示名 / 拡張子メニューの checked を controller の
+    // 状態へ揃える (authority は controller)。種別か拡張子を変えたら必ず呼ぶ。
+    void syncFilterActions();
     // Regex の構文を best-effort で見て検索欄の見た目とメッセージを更新する。
     // **ユーザーの pattern には触れない。検索そのものは既存経路のまま。**
     void updateRegexValidation();
@@ -131,6 +135,9 @@ private:
 
     // テーマ変更時にアイコンを描き直すために保持する。
     std::array<QAction*, 6> m_kindActions{};
+    // 種別ごとの拡張子メニュー。拡張子を持たない All / Directory は nullptr。
+    std::array<QMenu*, 6> m_kindMenus{};
+    QToolBar* m_filterToolBar = nullptr;
     QToolButton* m_themeButton = nullptr;
 
     QAction* m_regexAction = nullptr;

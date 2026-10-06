@@ -117,6 +117,10 @@ QString detailStyleSheet(const Colors& c)
                           "QToolButton { padding: 3px 8px; border: 1px solid transparent;"
                           " border-radius: 3px; }"
                           "QToolButton:hover { background: %1; }"
+                          // 種別の split ボタン。右端の矢印を区切り線で別ボタンに見せる。
+                          "QToolButton[popupMode=\"1\"] { padding-right: 18px; }"
+                          "QToolButton::menu-button { width: 14px; border: 0px;"
+                          " border-left: 1px solid %6; }"
                           "QToolButton:checked { background: %2; border: 1px solid %3; }"
                           "QHeaderView::section { background: %4; color: %5; padding: 4px;"
                           " border: 0px; border-right: 1px solid %6; }"

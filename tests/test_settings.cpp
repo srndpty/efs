@@ -23,6 +23,8 @@ private slots:
     void themeRoundTrip();
     void kindRoundTrip_data();
     void kindRoundTrip();
+    void extensionRoundTrip();
+    void extensionOutsideKindFallsBackToAll();
     void sortKeyRoundTrip_data();
     void sortKeyRoundTrip();
     void sortOrderRoundTrip_data();
@@ -68,6 +70,7 @@ void TestSettings::defaultsWhenNothingSaved()
 
     QCOMPARE(loaded.theme, efs::ThemeMode::Dark);
     QCOMPARE(loaded.options.kind, efs::FileKind::All);
+    QVERIFY(loaded.options.extension.isEmpty());
     QCOMPARE(loaded.options.regex, false);
     QCOMPARE(loaded.options.sortKey, efs::SortKey::Name);
     QCOMPARE(loaded.options.sortOrder, efs::SortOrder::Asc);
@@ -173,6 +176,45 @@ void TestSettings::sortOrderRoundTrip()
 }
 
 // 手編集で壊れた / 将来消えた列挙子が残っている INI。既定値へ戻ること。
+void TestSettings::extensionRoundTrip()
+{
+    efs::Settings saved;
+    saved.options.kind = efs::FileKind::Image;
+    saved.options.extension = QStringLiteral("png");
+    QVERIFY(saved.save());
+
+    const efs::Settings loaded = efs::Settings::load();
+    QCOMPARE(loaded.options.kind, efs::FileKind::Image);
+    QCOMPARE(loaded.options.extension, QStringLiteral("png"));
+}
+
+// 種別のリストに無い拡張子 (手編集 / 種別とのずれ / リストから外れた値) は
+// 「種別の全拡張子」に戻す。種別そのものは維持する。
+void TestSettings::extensionOutsideKindFallsBackToAll()
+{
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("settingsVersion"), 1);
+        settings.setValue(QStringLiteral("search/kind"), QStringLiteral("video"));
+        settings.setValue(QStringLiteral("search/extension"), QStringLiteral("png"));
+        settings.sync();
+    }
+    efs::Settings loaded = efs::Settings::load();
+    QCOMPARE(loaded.options.kind, efs::FileKind::Video);
+    QVERIFY(loaded.options.extension.isEmpty());
+
+    // 拡張子を持たない種別でも同じ。
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("search/kind"), QStringLiteral("directory"));
+        settings.setValue(QStringLiteral("search/extension"), QStringLiteral("png"));
+        settings.sync();
+    }
+    loaded = efs::Settings::load();
+    QCOMPARE(loaded.options.kind, efs::FileKind::Directory);
+    QVERIFY(loaded.options.extension.isEmpty());
+}
+
 void TestSettings::corruptedEnumsFallBackToDefaults()
 {
     {
@@ -262,11 +304,12 @@ void TestSettings::searchTextIsNotPersisted()
     QSettings settings;
     const QStringList keys = settings.allKeys();
     const QStringList expected{
-        QStringLiteral("settingsVersion"),    QStringLiteral("appearance/theme"),
-        QStringLiteral("search/kind"),        QStringLiteral("search/regex"),
-        QStringLiteral("search/sortKey"),     QStringLiteral("search/sortOrder"),
-        QStringLiteral("hotkey/show"),        QStringLiteral("window/geometry"),
-        QStringLiteral("window/headerState"), QStringLiteral("window/state"),
+        QStringLiteral("settingsVersion"),  QStringLiteral("appearance/theme"),
+        QStringLiteral("search/kind"),      QStringLiteral("search/extension"),
+        QStringLiteral("search/regex"),     QStringLiteral("search/sortKey"),
+        QStringLiteral("search/sortOrder"), QStringLiteral("hotkey/show"),
+        QStringLiteral("window/geometry"),  QStringLiteral("window/headerState"),
+        QStringLiteral("window/state"),
     };
 
     QStringList sorted = keys;

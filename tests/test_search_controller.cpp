@@ -102,6 +102,7 @@ private slots:
     void emptyTextWithFileKindSearches();
     void returningToAllWhileEmptyClears();
     void kindChangeSearchesImmediately();
+    void extensionFilterIsOneQueryAndKindResetsIt();
     void regexChangeSearchesImmediately();
     void sortChangePropagatesImmediately();
     void redundantStateChangesIssueNoQuery();
@@ -410,6 +411,35 @@ void TestSearchController::kindChangeSearchesImmediately()
     QCOMPARE(fake->queries().at(0).kind, efs::FileKind::Document);
     QCOMPARE(fake->queries().at(0).text, QStringLiteral("report"));
     QCOMPARE(controller.kind(), efs::FileKind::Document);
+}
+
+// 拡張子メニューからの選択は kind と extension を 1 本のクエリで変える。
+// 種別ボタン本体 (setKind) は拡張子の絞り込みを解除する。
+void TestSearchController::extensionFilterIsOneQueryAndKindResetsIt()
+{
+    auto backend = std::make_unique<GatedFakeBackend>();
+    GatedFakeBackend* fake = backend.get();
+    fake->release(16);
+
+    constexpr int kNeverFiresMs = 600000;
+    efs::SearchController controller(std::move(backend), kNeverFiresMs);
+
+    // 別の種別から直接拡張子を選んでも 1 本。
+    controller.setFilter(efs::FileKind::Image, QStringLiteral("png"));
+    QTRY_COMPARE(fake->queries().size(), 1);
+    QCOMPARE(fake->queries().at(0).kind, efs::FileKind::Image);
+    QCOMPARE(fake->queries().at(0).extension, QStringLiteral("png"));
+    QCOMPARE(controller.options().extension, QStringLiteral("png"));
+
+    // 同じ値の再設定では発行しない。
+    controller.setFilter(efs::FileKind::Image, QStringLiteral("png"));
+
+    // 同じ種別でも、ボタン本体は All (全拡張子) へ戻す再検索になる。
+    controller.setKind(efs::FileKind::Image);
+    QTRY_COMPARE(fake->queries().size(), 2);
+    QCOMPARE(fake->queries().at(1).kind, efs::FileKind::Image);
+    QVERIFY(fake->queries().at(1).extension.isEmpty());
+    QVERIFY(controller.extension().isEmpty());
 }
 
 void TestSearchController::regexChangeSearchesImmediately()

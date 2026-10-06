@@ -68,9 +68,15 @@ void SearchController::searchNow()
 
 void SearchController::setKind(FileKind kind)
 {
-    if (kind == m_query.kind)
+    setFilter(kind, {});
+}
+
+void SearchController::setFilter(FileKind kind, const QString& extension)
+{
+    if (kind == m_query.kind && extension == m_query.extension)
         return;
     m_query.kind = kind;
+    m_query.extension = extension;
     dispatch();
 }
 
@@ -96,6 +102,7 @@ void SearchController::restoreOptions(const SearchOptions& options, InitialDispa
     // 値を全部入れてから 1 回だけ dispatch する。個々の setter を呼ぶと
     // 復元だけで最大 3 本のクエリが飛ぶ。
     m_query.kind = options.kind;
+    m_query.extension = options.extension;
     m_query.regex = options.regex;
     m_query.sortKey = options.sortKey;
     m_query.sortOrder = options.sortOrder;
@@ -108,6 +115,7 @@ void SearchController::restoreOptions(const SearchOptions& options, InitialDispa
 SearchOptions SearchController::options() const
 {
     return {.kind = m_query.kind,
+            .extension = m_query.extension,
             .regex = m_query.regex,
             .sortKey = m_query.sortKey,
             .sortOrder = m_query.sortOrder};
